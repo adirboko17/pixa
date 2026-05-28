@@ -42,7 +42,8 @@ import {
   type ShopifyProduct,
 } from "@/lib/shopify-client";
 import type { Quality } from "@/lib/pricing";
-import { loadBatchHistory, persistBatch } from "@/lib/batch-history";
+import { loadBatchHistory, persistBatch, repairBatchHistoryNames } from "@/lib/batch-history";
+import { isLegacyBatchProductName } from "@/lib/product-name-resolver";
 
 type Stage = "login" | "register" | "onboarding" | "connect" | "app";
 type AppRoute = NavId | "results";
@@ -268,14 +269,37 @@ export default function PixaApp() {
   );
 
   useEffect(() => {
-    if (connection) {
-      loadShopifyCatalog(connection);
-    } else {
-      setShopifyProducts([]);
-      setShopifyCategories([]);
-      setShopifyCatalogTotal(0);
+    if (!connection || !session?.user?.id) {
+      if (!connection) {
+        setShopifyProducts([]);
+        setShopifyCategories([]);
+        setShopifyCatalogTotal(0);
+      }
+      return;
     }
-  }, [connection, loadShopifyCatalog]);
+    void loadShopifyCatalog(connection);
+  }, [connection, session?.user?.id, loadShopifyCatalog]);
+
+  /* ---------- Resolve Shopify product names for legacy history rows ---------- */
+  useEffect(() => {
+    if (!connection || shopifyProducts.length === 0 || batchHistory.length === 0) {
+      return;
+    }
+    const needsRepair = batchHistory.some((b) =>
+      b.items?.some((i) => isLegacyBatchProductName(i.productName))
+    );
+    if (!needsRepair) return;
+
+    let cancelled = false;
+    void repairBatchHistoryNames(batchHistory, shopifyProducts).then((repaired) => {
+      if (!cancelled && repaired !== batchHistory) {
+        setBatchHistory(repaired);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, shopifyProducts, batchHistory]);
 
   /* ---------- Auth flow ----------
    * Note: most stage transitions are driven by the `onAuthStateChange`
@@ -502,6 +526,7 @@ export default function PixaApp() {
         afterUrl: r.error ? undefined : r.afterUrl,
         status: r.error ? "failed" : "success",
         error: r.error,
+        shopifyProductId: r.isShopify ? r.productId : undefined,
       })),
     };
 
@@ -698,21 +723,22 @@ export default function PixaApp() {
           undefined
         }
         productsCount={productsCountForSidebar}
+        productsLoading={!!connection && loadingShopify}
         historyCount={batchHistory.length || undefined}
       >
         {route === "dashboard" && (
           <DashboardScreen
             firstName={profileName ?? userEmail ?? null}
             catalogCount={
-              uploads.length + (connection ? shopifyCatalogTotal : 0)
-            }
-            pendingProducts={Math.max(
-              0,
               uploads.length +
-                (connection ? shopifyCatalogTotal : 0) -
-                results.filter((r) => !r.error).length
-            )}
+              (connection
+                ? Math.max(shopifyCatalogTotal, shopifyProducts.length)
+                : 0)
+            }
+            loadingCatalog={!!connection && loadingShopify}
             recentResults={results}
+            batchHistory={batchHistory}
+            shopifyProducts={shopifyProducts}
             connected={!!connection}
             onStartBatch={() => startBatch()}
             onConnect={() => setStage("connect")}

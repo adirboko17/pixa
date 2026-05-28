@@ -59,6 +59,7 @@ export type HistoryBatchItem = {
   afterUrl?: string;
   status: "success" | "failed";
   error?: string;
+  shopifyProductId?: number;
 };
 
 export type HistoryBatch = {

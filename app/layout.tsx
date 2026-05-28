@@ -5,6 +5,10 @@ export const metadata: Metadata = {
   title: "Pixa · תמונות מוצר שמוכרות לבד",
   description:
     "פלטפורמת AI לייצור תמונות מוצר מקצועיות. מתחבר ל-Shopify, מסנכרן את הקטלוג, ומעצב עיצובים שלמים של תמונות בלחיצה.",
+  icons: {
+    icon: "/assets/favicon.png",
+    apple: "/assets/favicon.png",
+  },
 };
 
 export default function RootLayout({

@@ -21,6 +21,10 @@ import { Spinner } from "./screens-shell";
 import { StarLoader } from "./StarLoader";
 import { BulkBar } from "./BulkBar";
 import ImageViewer, { type ViewerImage } from "@/components/ImageViewer";
+import {
+  isLegacyBatchProductName,
+  lookupAfterProductMap,
+} from "@/lib/product-name-resolver";
 
 const II = Icons;
 
@@ -76,16 +80,155 @@ const Sparkline: React.FC<{ data?: number[]; color?: string }> = ({
    DASHBOARD — editorial magazine layout
    ============================================================ */
 
+function expandBatchItems(batch: HistoryBatch): HistoryBatchItem[] {
+  const items = batch.items ?? [];
+  const withUrls = items.filter((i) => i.afterUrl || i.beforeUrl);
+  if (withUrls.length > 0) return withUrls;
+  if (items.length > 0) return items;
+
+  const count = Math.max(batch.successful, batch.count, 0);
+  if (count <= 0 && !batch.previewUrl) return [];
+
+  return Array.from({ length: Math.max(count, 1) }, (_, idx) => ({
+    id: `${batch.id}-${idx}`,
+    productName: batch.name,
+    afterUrl: idx === 0 ? batch.previewUrl : undefined,
+    beforeUrl: idx === 0 ? batch.previewUrl : undefined,
+    status: "success" as const,
+  }));
+}
+
+function formatDesignStyleLabel(presetId?: string): string {
+  const preset = presetId ? PRESETS.find((p) => p.id === presetId) : undefined;
+  return preset ? `עיצוב ${preset.name}` : "עיצוב";
+}
+
+function isLegacyBatchTitle(name: string): boolean {
+  return isLegacyBatchProductName(name);
+}
+
+function resolveRecentItemTitle(
+  item: {
+    name: string;
+    beforeUrl?: string;
+    afterUrl?: string;
+    presetId?: string;
+    isShopify?: boolean;
+    productId: number;
+    shopifyProductId?: number;
+  },
+  shopifyProducts: ShopifyBackedProduct[]
+): string {
+  const shopifyId =
+    item.shopifyProductId ?? (item.isShopify ? item.productId : undefined);
+  if (shopifyId && shopifyProducts.length > 0) {
+    const match = shopifyProducts.find((p) => p.id === shopifyId);
+    if (match) return match.name;
+  }
+  if (item.beforeUrl && shopifyProducts.length > 0) {
+    const normalized = item.beforeUrl.split("?")[0];
+    const match = shopifyProducts.find(
+      (p) => p.imageUrl.split("?")[0] === normalized
+    );
+    if (match) return match.name;
+  }
+  const mapped = lookupAfterProductMap(item.afterUrl);
+  if (mapped?.name) return mapped.name;
+  if (isLegacyBatchTitle(item.name)) {
+    return shopifyProducts.length > 0 ? "טוען…" : item.name;
+  }
+  return item.name;
+}
+
+function historyToProcessedResults(
+  batches: HistoryBatch[],
+  limit = 5
+): Array<{
+  productId: number;
+  beforeUrl: string;
+  afterUrl: string;
+  name: string;
+  isReal: boolean;
+  isShopify: boolean;
+  presetId?: string;
+  shopifyProductId?: number;
+  error?: string;
+}> {
+  const results: Array<{
+    productId: number;
+    beforeUrl: string;
+    afterUrl: string;
+    name: string;
+    isReal: boolean;
+    isShopify: boolean;
+    presetId?: string;
+    shopifyProductId?: number;
+    error?: string;
+  }> = [];
+  for (const batch of batches) {
+    for (const item of expandBatchItems(batch)) {
+      const imageUrl = item.afterUrl ?? item.beforeUrl;
+      results.push({
+        productId: item.shopifyProductId ?? results.length,
+        beforeUrl: item.beforeUrl ?? imageUrl ?? "",
+        afterUrl: item.afterUrl ?? imageUrl ?? "",
+        name: item.productName,
+        isReal: true,
+        isShopify: !!item.shopifyProductId,
+        presetId: batch.preset,
+        shopifyProductId: item.shopifyProductId,
+        error: item.status === "failed" ? item.error : undefined,
+      });
+      if (results.length >= limit) return results;
+    }
+  }
+  return results;
+}
+
+function ResultThumb({
+  afterUrl,
+  presetId,
+  alt,
+}: {
+  afterUrl?: string;
+  presetId?: string;
+  alt: string;
+}) {
+  const preset = presetId ? PRESETS.find((p) => p.id === presetId) : null;
+  if (afterUrl) {
+    return (
+      <img
+        src={afterUrl}
+        alt={alt}
+        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+      />
+    );
+  }
+  if (preset?.gradient) {
+    return (
+      <div
+        aria-hidden
+        style={{ width: "100%", height: "100%", background: preset.gradient }}
+      />
+    );
+  }
+  return null;
+}
+
 export const DashboardScreen: React.FC<{
   onStartBatch: () => void;
   /** First-name-style label for the hero greeting. */
   firstName?: string | null;
   /** Total products in the catalog (uploads + Shopify). */
   catalogCount: number;
-  /** Catalog items that haven't been processed yet. */
-  pendingProducts: number;
+  /** True while the Shopify catalog is loading on first paint. */
+  loadingCatalog?: boolean;
   /** Most recent processed results (newest first). */
   recentResults: ProcessedResult[];
+  /** Persisted batches from Supabase — used for totals when session results are empty. */
+  batchHistory?: HistoryBatch[];
+  /** Shopify catalog — used to resolve product names in recent list. */
+  shopifyProducts?: ShopifyBackedProduct[];
   /** Whether the user is connected to a Shopify store. */
   connected: boolean;
   /** Optional CTA: take the user to the connect screen. */
@@ -96,15 +239,32 @@ export const DashboardScreen: React.FC<{
   onStartBatch,
   firstName,
   catalogCount,
-  pendingProducts,
+  loadingCatalog = false,
   recentResults,
+  batchHistory = [],
+  shopifyProducts = [],
   connected,
   onConnect,
   onGoToProducts,
 }) => {
   const greetingName = (firstName?.trim() || "").split(/\s+/)[0] || "";
-  const completedCount = recentResults.length;
-  const isEmpty = catalogCount === 0 && completedCount === 0;
+  const completedCount = useMemo(
+    () => batchHistory.reduce((sum, b) => sum + b.successful, 0),
+    [batchHistory]
+  );
+  const pendingCount = Math.max(0, catalogCount - completedCount);
+  const displayRecentResults = useMemo(() => {
+    const base =
+      recentResults.length > 0
+        ? recentResults
+        : historyToProcessedResults(batchHistory, 5);
+    return base.map((r) => ({
+      ...r,
+      name: resolveRecentItemTitle(r, shopifyProducts),
+    }));
+  }, [recentResults, batchHistory, shopifyProducts]);
+  const isEmpty =
+    !loadingCatalog && catalogCount === 0 && completedCount === 0;
 
   return (
     <>
@@ -186,7 +346,18 @@ export const DashboardScreen: React.FC<{
               margin: 0,
             }}
           >
-            {isEmpty ? (
+            {loadingCatalog ? (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 10,
+                }}
+              >
+                <Spinner size={18} />
+                טוען את הקטלוג מ-Shopify…
+              </span>
+            ) : isEmpty ? (
               connected ? (
                 <>
                   החנות מחוברת אבל עדיין אין כאן מוצרים. רענן את הקטלוג או התחל
@@ -219,11 +390,11 @@ export const DashboardScreen: React.FC<{
                   מהמחשב כדי להתחיל.
                 </>
               )
-            ) : pendingProducts > 0 ? (
+            ) : pendingCount > 0 ? (
               <>
                 יש לך{" "}
                 <strong style={{ color: "var(--ink)", fontWeight: 600 }}>
-                  {pendingProducts} {pendingProducts === 1 ? "מוצר" : "מוצרים"}
+                  {pendingCount} {pendingCount === 1 ? "מוצר" : "מוצרים"}
                 </strong>{" "}
                 שמחכים לעיצוב
                 {completedCount > 0 ? (
@@ -282,19 +453,29 @@ export const DashboardScreen: React.FC<{
           />
           <StatCell
             label="קטלוג"
+            loading={loadingCatalog}
             num={catalogCount === 0 ? "—" : String(catalogCount)}
             trend={
-              catalogCount === 0
-                ? "ריק"
-                : connected
-                  ? "Shopify מסונכרן"
-                  : "מקומי"
+              loadingCatalog
+                ? "טוען…"
+                : catalogCount === 0
+                  ? "ריק"
+                  : connected
+                    ? "Shopify מסונכרן"
+                    : "מקומי"
             }
           />
           <StatCell
             label="ממתינים לעיצוב"
-            num={pendingProducts === 0 ? "—" : pad2(pendingProducts)}
-            trend={pendingProducts === 0 ? "אין" : "מוכנים לעיצוב"}
+            loading={loadingCatalog}
+            num={pendingCount === 0 ? "—" : String(pendingCount)}
+            trend={
+              loadingCatalog
+                ? "טוען…"
+                : pendingCount === 0
+                  ? "אין"
+                  : "מוכנים לעיצוב"
+            }
           />
           <StatCell
             label="חיבור חנות"
@@ -329,7 +510,7 @@ export const DashboardScreen: React.FC<{
                 במערכת
               </h2>
             </div>
-            {recentResults.length > 0 && (
+            {displayRecentResults.length > 0 && (
               <a
                 onClick={onGoToProducts}
                 className="btn-line"
@@ -349,7 +530,7 @@ export const DashboardScreen: React.FC<{
             )}
           </div>
 
-          {recentResults.length === 0 ? (
+          {displayRecentResults.length === 0 ? (
             <div
               style={{
                 border: "1px dashed var(--hair-2)",
@@ -390,7 +571,7 @@ export const DashboardScreen: React.FC<{
             </div>
           ) : (
             <div>
-              {recentResults.slice(0, 5).map((r, i) => (
+              {displayRecentResults.slice(0, 5).map((r, i) => (
                 <div
                   key={`${r.productId}-${i}`}
                   style={{
@@ -425,17 +606,13 @@ export const DashboardScreen: React.FC<{
                       background: "var(--bg-card)",
                     }}
                   >
-                    {r.afterUrl && (
-                      <img
-                        src={r.afterUrl}
+                    {r.afterUrl || r.presetId ? (
+                      <ResultThumb
+                        afterUrl={r.afterUrl || undefined}
+                        presetId={r.presetId}
                         alt={r.name}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
-                        }}
                       />
-                    )}
+                    ) : null}
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <div
@@ -459,7 +636,7 @@ export const DashboardScreen: React.FC<{
                         alignItems: "center",
                       }}
                     >
-                      <span>{r.isShopify ? "Shopify" : "תמונה מקומית"}</span>
+                      <span>{formatDesignStyleLabel(r.presetId)}</span>
                       {r.error && (
                         <>
                           <span className="aster">·</span>
@@ -603,7 +780,7 @@ export const DashboardScreen: React.FC<{
             <div className="eyebrow" style={{ marginBottom: 16 }}>
               05 · עיצובים אחרונים
             </div>
-            {recentResults.length === 0 ? (
+            {displayRecentResults.length === 0 ? (
               <div
                 style={{
                   border: "1px dashed var(--hair-2)",
@@ -626,7 +803,7 @@ export const DashboardScreen: React.FC<{
                     gap: 10,
                   }}
                 >
-                  {recentResults.slice(0, 3).map((r, i) => (
+                  {displayRecentResults.slice(0, 3).map((r, i) => (
                     <div
                       key={`${r.productId}-thumb-${i}`}
                       style={{
@@ -637,17 +814,13 @@ export const DashboardScreen: React.FC<{
                         background: "var(--bg-card)",
                       }}
                     >
-                      {r.afterUrl && (
-                        <img
-                          src={r.afterUrl}
+                      {r.afterUrl || r.presetId ? (
+                        <ResultThumb
+                          afterUrl={r.afterUrl || undefined}
+                          presetId={r.presetId}
                           alt={r.name}
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "cover",
-                          }}
                         />
-                      )}
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -689,7 +862,7 @@ export const DashboardScreen: React.FC<{
                     >
                       {Math.round(
                         ((completedCount -
-                          recentResults.filter((r) => !!r.error).length) /
+                          batchHistory.reduce((sum, b) => sum + b.failed, 0)) /
                           Math.max(1, completedCount)) *
                           100
                       )}
@@ -722,21 +895,28 @@ const StatCell: React.FC<{
   trend?: string;
   spark?: number[];
   highlight?: boolean;
-}> = ({ label, num, suffix, trend, spark, highlight }) => (
+  loading?: boolean;
+}> = ({ label, num, suffix, trend, spark, highlight, loading }) => (
   <div className="stat-cell">
     <div className="stat-label">{label}</div>
     <div className="stat-num">
-      {num}
-      {suffix && (
-        <span
-          style={{
-            fontSize: "0.5em",
-            color: "var(--ink-3)",
-            fontWeight: 500,
-          }}
-        >
-          {suffix}
-        </span>
+      {loading ? (
+        <Spinner size={28} />
+      ) : (
+        <>
+          {num}
+          {suffix && (
+            <span
+              style={{
+                fontSize: "0.5em",
+                color: "var(--ink-3)",
+                fontWeight: 500,
+              }}
+            >
+              {suffix}
+            </span>
+          )}
+        </>
       )}
     </div>
     {spark && (
@@ -1548,6 +1728,9 @@ export type ProcessedResult = {
   shopifyImageId?: number;
   /** Any processing error message. */
   error?: string;
+  /** Preset used — for gradient placeholder when image URL is missing. */
+  presetId?: string;
+  shopifyProductId?: number;
 };
 
 async function urlToFile(
@@ -2465,14 +2648,7 @@ export const HistoryScreen: React.FC<{
 
             {month.items.map((b, i) => {
               const preset = PRESETS.find((p) => p.id === b.preset);
-              const batchItems: HistoryBatchItem[] =
-                b.items ??
-                Array.from({ length: b.count }, (_, idx) => ({
-                  id: `${b.id}-${idx}`,
-                  productName: b.name,
-                  afterUrl: idx === 0 ? b.previewUrl : undefined,
-                  status: "success" as const,
-                }));
+              const batchItems = expandBatchItems(b);
 
               return (
                 <div

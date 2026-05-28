@@ -3,6 +3,13 @@
 import { createClient } from "@/lib/supabase/client";
 import type { ProcessedResult } from "@/components/pixa/screens-app";
 import { PRESETS, type HistoryBatch, type HistoryBatchItem } from "@/components/pixa/data";
+import type { ShopifyBackedProduct } from "@/components/pixa/data";
+import {
+  isLegacyBatchProductName,
+  preloadShopifyFingerprints,
+  resolveShopifyProductName,
+  saveAfterProductMap,
+} from "@/lib/product-name-resolver";
 
 const BUCKET = "processed-images";
 
@@ -80,6 +87,51 @@ function mapItemStatus(
   return status === "failed" ? "failed" : "success";
 }
 
+function publicStorageUrl(path: string): string {
+  const supabase = createClient();
+  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+/** Recover images uploaded to storage when batch_items rows are missing. */
+async function recoverItemsFromStorage(
+  userId: string,
+  batchId: string,
+  batchName: string
+): Promise<HistoryBatchItem[]> {
+  const supabase = createClient();
+  const folder = `${userId}/${batchId}`;
+  const { data: files, error } = await supabase.storage
+    .from(BUCKET)
+    .list(folder, {
+      limit: 100,
+      sortBy: { column: "created_at", order: "asc" },
+    });
+
+  if (error || !files?.length) return [];
+
+  const label = batchName.replace(/^עיצוב · /, "") || batchName;
+  const beforeById = new Map<string, string>();
+  for (const file of files) {
+    if (!file.name?.endsWith("-before.png")) continue;
+    const itemId = file.name.slice(0, -"-before.png".length);
+    beforeById.set(itemId, publicStorageUrl(`${folder}/${file.name}`));
+  }
+
+  return files
+    .filter((file) => file.name?.endsWith("-after.png"))
+    .map((file) => {
+      const itemId = file.name!.slice(0, -"-after.png".length);
+      const afterUrl = publicStorageUrl(`${folder}/${file.name}`);
+      return {
+        id: itemId,
+        productName: label,
+        afterUrl,
+        beforeUrl: beforeById.get(itemId),
+        status: "success" as const,
+      };
+    });
+}
+
 export async function loadBatchHistory(userId: string): Promise<HistoryBatch[]> {
   const supabase = createClient();
 
@@ -113,32 +165,43 @@ export async function loadBatchHistory(userId: string): Promise<HistoryBatch[]> 
     itemsByBatch.set(item.batch_id, list);
   }
 
-  return batches.map((batch) => {
-    const batchItems = itemsByBatch.get(batch.id) ?? [];
-    const mappedItems: HistoryBatchItem[] = batchItems.map((item) => ({
-      id: item.id,
-      productName: item.product_name ?? "",
-      beforeUrl: item.before_url ?? undefined,
-      afterUrl: item.after_url ?? undefined,
-      status: mapItemStatus(item.status),
-      error: item.error ?? undefined,
-    }));
+  return Promise.all(
+    batches.map(async (batch) => {
+      const batchItems = itemsByBatch.get(batch.id) ?? [];
+      let mappedItems: HistoryBatchItem[] = batchItems.map((item) => ({
+        id: item.id,
+        productName: item.product_name ?? "",
+        beforeUrl: item.before_url ?? undefined,
+        afterUrl: item.after_url ?? undefined,
+        status: mapItemStatus(item.status),
+        error: item.error ?? undefined,
+        shopifyProductId: item.shopify_product_id ?? undefined,
+      }));
 
-    return {
-      id: batch.id,
-      name: batch.name ?? "עיצוב",
-      preset: batch.preset,
-      count: batch.total_items,
-      successful: batch.successful_items,
-      failed: batch.failed_items,
-      createdAt: new Date(batch.created_at),
-      status: mapBatchStatus(batch.status, batch.failed_items),
-      previewUrl:
-        mappedItems.find((i) => i.afterUrl)?.afterUrl ??
-        mappedItems.find((i) => i.beforeUrl)?.beforeUrl,
-      items: mappedItems,
-    };
-  });
+      if (mappedItems.length === 0) {
+        mappedItems = await recoverItemsFromStorage(
+          userId,
+          batch.id,
+          batch.name ?? "עיצוב"
+        );
+      }
+
+      return {
+        id: batch.id,
+        name: batch.name ?? "עיצוב",
+        preset: batch.preset,
+        count: batch.total_items,
+        successful: batch.successful_items,
+        failed: batch.failed_items,
+        createdAt: new Date(batch.created_at),
+        status: mapBatchStatus(batch.status, batch.failed_items),
+        previewUrl:
+          mappedItems.find((i) => i.afterUrl)?.afterUrl ??
+          mappedItems.find((i) => i.beforeUrl)?.beforeUrl,
+        items: mappedItems,
+      };
+    })
+  );
 }
 
 export async function persistBatch(
@@ -154,6 +217,27 @@ export async function persistBatch(
   const successful = results.filter((r) => !r.error).length;
   const failed = results.filter((r) => r.error).length;
   const batchName = `עיצוב · ${presetName}`;
+
+  const { error: batchError } = await supabase.from("batches").insert({
+    id: batchId,
+    user_id: userId,
+    name: batchName,
+    preset,
+    quality,
+    shopify_shop: shopifyShop ?? null,
+    total_items: results.length,
+    successful_items: successful,
+    failed_items: failed,
+    status: failed === results.length ? "failed" : "completed",
+    total_cost_usd: 0,
+    started_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+  });
+
+  if (batchError) {
+    console.error("[history] failed to insert batch", batchError);
+    return null;
+  }
 
   const mappedItems: HistoryBatchItem[] = [];
   let previewUrl: string | undefined;
@@ -211,6 +295,12 @@ export async function persistBatch(
 
     if (itemError) {
       console.error("[history] failed to insert batch item", itemError);
+    } else if (afterUrl) {
+      saveAfterProductMap(
+        afterUrl,
+        result.name,
+        result.isShopify ? result.productId : undefined
+      );
     }
 
     mappedItems.push({
@@ -220,28 +310,8 @@ export async function persistBatch(
       afterUrl: afterUrl ?? undefined,
       status: result.error ? "failed" : "success",
       error: result.error,
+      shopifyProductId: result.isShopify ? result.productId : undefined,
     });
-  }
-
-  const { error: batchError } = await supabase.from("batches").insert({
-    id: batchId,
-    user_id: userId,
-    name: batchName,
-    preset,
-    quality,
-    shopify_shop: shopifyShop ?? null,
-    total_items: results.length,
-    successful_items: successful,
-    failed_items: failed,
-    status: failed === results.length ? "failed" : "completed",
-    total_cost_usd: 0,
-    started_at: new Date().toISOString(),
-    completed_at: new Date().toISOString(),
-  });
-
-  if (batchError) {
-    console.error("[history] failed to insert batch", batchError);
-    return null;
   }
 
   return {
@@ -261,4 +331,55 @@ export async function persistBatch(
     previewUrl,
     items: mappedItems,
   };
+}
+
+export async function repairBatchHistoryNames(
+  batches: HistoryBatch[],
+  shopifyProducts: ShopifyBackedProduct[]
+): Promise<HistoryBatch[]> {
+  if (!shopifyProducts.length || !batches.length) return batches;
+
+  const needsRepair = batches.some((b) =>
+    b.items?.some((i) => isLegacyBatchProductName(i.productName))
+  );
+  if (!needsRepair) return batches;
+
+  await preloadShopifyFingerprints(shopifyProducts);
+
+  const supabase = createClient();
+  let changed = false;
+  const next = structuredClone(batches) as HistoryBatch[];
+
+  for (const batch of next) {
+    if (!batch.items?.length) continue;
+    for (const item of batch.items) {
+      if (!isLegacyBatchProductName(item.productName)) continue;
+
+      const resolved = await resolveShopifyProductName(
+        item.afterUrl,
+        item.beforeUrl,
+        item.productName,
+        item.shopifyProductId,
+        shopifyProducts
+      );
+      if (!resolved) continue;
+
+      item.productName = resolved.name;
+      item.shopifyProductId = resolved.shopifyProductId;
+      changed = true;
+
+      if (item.afterUrl) {
+        await supabase
+          .from("batch_items")
+          .update({
+            product_name: resolved.name,
+            shopify_product_id: resolved.shopifyProductId ?? null,
+            source_type: resolved.shopifyProductId ? "shopify" : "upload",
+          })
+          .eq("id", item.id);
+      }
+    }
+  }
+
+  return changed ? next : batches;
 }

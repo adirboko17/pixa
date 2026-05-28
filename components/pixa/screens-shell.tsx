@@ -24,20 +24,21 @@ export const Sidebar: React.FC<{
   onNav: (id: NavId) => void;
   storeName?: string;
   productsCount?: number;
+  productsLoading?: boolean;
   historyCount?: number;
-}> = ({ current, onNav, storeName, productsCount, historyCount }) => {
+}> = ({ current, onNav, storeName, productsCount, productsLoading, historyCount }) => {
   const items: Array<{
     id: NavId;
     label: string;
     icon: (typeof I)[keyof typeof I];
-    count?: number | "";
+    count?: number | "" | "loading";
   }> = [
     { id: "dashboard", label: "דשבורד", icon: I.Dashboard, count: "" },
     {
       id: "products",
       label: "מוצרים",
       icon: I.Box,
-      count: typeof productsCount === "number" ? productsCount : "",
+      count: productsLoading ? "loading" : typeof productsCount === "number" ? productsCount : "",
     },
     { id: "history", label: "היסטוריה", icon: I.History, count: historyCount ?? "" },
     { id: "settings", label: "הגדרות", icon: I.Settings, count: "" },
@@ -75,7 +76,13 @@ export const Sidebar: React.FC<{
             <Ico size={17} />
             <span>{it.label}</span>
             {it.count !== "" && (
-              <span className="meta mono">{it.count as number}</span>
+              <span className="meta mono">
+                {it.count === "loading" ? (
+                  <Spinner size={11} />
+                ) : (
+                  (it.count as number)
+                )}
+              </span>
             )}
           </div>
         );
@@ -187,6 +194,7 @@ export const Layout: React.FC<{
   onLogout: () => void;
   storeName?: string;
   productsCount?: number;
+  productsLoading?: boolean;
   historyCount?: number;
 }> = ({
   current,
@@ -195,6 +203,7 @@ export const Layout: React.FC<{
   onLogout,
   storeName,
   productsCount,
+  productsLoading,
   historyCount,
 }) => (
   <div className="shell-grid">
@@ -203,6 +212,7 @@ export const Layout: React.FC<{
       onNav={onNav}
       storeName={storeName}
       productsCount={productsCount}
+      productsLoading={productsLoading}
       historyCount={historyCount}
     />
     <main style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
