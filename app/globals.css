@@ -1055,6 +1055,24 @@ body[data-density="spacious"] {
 .preset:hover {
   transform: translateY(-2px);
 }
+.preset.coming-soon {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: grayscale(0.35);
+}
+.preset.coming-soon:hover {
+  transform: none;
+}
+.preset.coming-soon .preset-thumb {
+  border-color: var(--hair);
+}
+.preset-tag-soon {
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  padding: 4px 8px;
+  border-radius: 6px;
+  letter-spacing: 0.08em;
+}
 .preset-thumb {
   aspect-ratio: 4/5;
   border-radius: 12px;

@@ -3,13 +3,14 @@
 import { createClient } from "@/lib/supabase/client";
 import type { ProcessedResult } from "@/components/pixa/screens-app";
 import { PRESETS, type HistoryBatch, type HistoryBatchItem } from "@/components/pixa/data";
-import type { ShopifyBackedProduct } from "@/components/pixa/data";
+import type { StoreBackedProduct } from "@/components/pixa/data";
 import {
   isLegacyBatchProductName,
   preloadShopifyFingerprints,
   resolveShopifyProductName,
   saveAfterProductMap,
 } from "@/lib/product-name-resolver";
+import { getBatchItemMeta, saveBatchItemMeta } from "@/lib/batch-item-meta";
 
 const BUCKET = "processed-images";
 
@@ -168,15 +169,21 @@ export async function loadBatchHistory(userId: string): Promise<HistoryBatch[]> 
   return Promise.all(
     batches.map(async (batch) => {
       const batchItems = itemsByBatch.get(batch.id) ?? [];
-      let mappedItems: HistoryBatchItem[] = batchItems.map((item) => ({
-        id: item.id,
-        productName: item.product_name ?? "",
-        beforeUrl: item.before_url ?? undefined,
-        afterUrl: item.after_url ?? undefined,
-        status: mapItemStatus(item.status),
-        error: item.error ?? undefined,
-        shopifyProductId: item.shopify_product_id ?? undefined,
-      }));
+      let mappedItems: HistoryBatchItem[] = batchItems.map((item) => {
+        const meta = getBatchItemMeta(item.id);
+        return {
+          id: item.id,
+          productName: item.product_name ?? "",
+          beforeUrl: item.before_url ?? undefined,
+          afterUrl: item.after_url ?? undefined,
+          status: mapItemStatus(item.status),
+          error: item.error ?? undefined,
+          shopifyProductId:
+            item.shopify_product_id ?? meta?.shopifyProductId ?? undefined,
+          externalProductId: meta?.externalProductId,
+          sourceType: meta?.sourceType,
+        };
+      });
 
       if (mappedItems.length === 0) {
         mappedItems = await recoverItemsFromStorage(
@@ -278,6 +285,12 @@ export async function persistBatch(
       if (!previewUrl) previewUrl = afterUrl;
     }
 
+    const sourceType = result.isCustomApi
+      ? "custom-api"
+      : result.isShopify
+        ? "shopify"
+        : "upload";
+
     const { error: itemError } = await supabase.from("batch_items").insert({
       id: itemId,
       batch_id: batchId,
@@ -295,12 +308,19 @@ export async function persistBatch(
 
     if (itemError) {
       console.error("[history] failed to insert batch item", itemError);
-    } else if (afterUrl) {
-      saveAfterProductMap(
-        afterUrl,
-        result.name,
-        result.isShopify ? result.productId : undefined
-      );
+    } else {
+      saveBatchItemMeta(itemId, {
+        sourceType,
+        shopifyProductId: result.isShopify ? result.productId : undefined,
+        externalProductId: result.externalProductId,
+      });
+      if (afterUrl) {
+        saveAfterProductMap(
+          afterUrl,
+          result.name,
+          result.isShopify ? result.productId : undefined
+        );
+      }
     }
 
     mappedItems.push({
@@ -311,6 +331,8 @@ export async function persistBatch(
       status: result.error ? "failed" : "success",
       error: result.error,
       shopifyProductId: result.isShopify ? result.productId : undefined,
+      externalProductId: result.externalProductId,
+      sourceType,
     });
   }
 
@@ -335,7 +357,7 @@ export async function persistBatch(
 
 export async function repairBatchHistoryNames(
   batches: HistoryBatch[],
-  shopifyProducts: ShopifyBackedProduct[]
+  shopifyProducts: StoreBackedProduct[]
 ): Promise<HistoryBatch[]> {
   if (!shopifyProducts.length || !batches.length) return batches;
 

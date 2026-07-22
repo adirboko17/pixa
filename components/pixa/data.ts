@@ -33,6 +33,18 @@ export type ShopifyBackedProduct = Product & {
   productType?: string;
 };
 
+/**
+ * Product backed by a Lovable / Supabase custom API.
+ * `externalId` is the real UUID from the remote database.
+ */
+export type CustomBackedProduct = Product & {
+  isCustomApi: true;
+  externalId: string;
+  imageUrl: string;
+};
+
+export type StoreBackedProduct = ShopifyBackedProduct | CustomBackedProduct;
+
 export type Preset = {
   id: string;
   name: string;
@@ -40,6 +52,15 @@ export type Preset = {
   gradient: string;
   accent: string;
   desc: string;
+  /** When false, preset is visible but not selectable. */
+  available?: boolean;
+  comingSoon?: boolean;
+};
+
+export type ProcessingOptions = {
+  presetId: string;
+  removeBackground: boolean;
+  keepProportion: boolean;
 };
 
 /** @deprecated Demo-only — not used in production screens. */
@@ -60,6 +81,12 @@ export type HistoryBatchItem = {
   status: "success" | "failed";
   error?: string;
   shopifyProductId?: number;
+  externalProductId?: string;
+  sourceType?: "shopify" | "custom-api" | "upload";
+  /** Set by UI when item was already published to the store. */
+  published?: boolean;
+  /** Whether this item can be published from history. */
+  publishable?: boolean;
 };
 
 export type HistoryBatch = {
@@ -114,14 +141,85 @@ export const PRODUCTS: Product[] = [
 ];
 
 export const PRESETS: Preset[] = [
-  { id: "studio-white", name: "סטודיו לבן", tag: "הכי פופולרי", gradient: "linear-gradient(135deg, #f8f8f8, #e0e0e0)", accent: "#fff", desc: "רקע לבן נקי, צל רך" },
-  { id: "lifestyle", name: "לייפסטייל", tag: "מומלץ", gradient: "linear-gradient(135deg, #FFD8C2, #F4A584)", accent: "#FF8A47", desc: "סצנה אותנטית עם תאורת יום" },
-  { id: "outdoor", name: "חוץ / טבע", tag: "", gradient: "linear-gradient(135deg, #88C9A1, #4B9F7C)", accent: "#25D396", desc: "רקע ירוק, אור שמש" },
-  { id: "marble", name: "שיש מבריק", tag: "פרימיום", gradient: "linear-gradient(135deg, #F0EDE8, #C8C1B5)", accent: "#C8C1B5", desc: "משטח שיש מהודר" },
-  { id: "sunset", name: "שקיעה חמה", tag: "", gradient: "linear-gradient(135deg, #FFB36E, #FF6B6B, #B040E0)", accent: "#FF6B6B", desc: "גרדיאנט חם וזוהר" },
-  { id: "dark-luxe", name: "דארק לקס", tag: "יוקרה", gradient: "linear-gradient(135deg, #1a1a2e, #16213e)", accent: "#0E0B17", desc: "רקע שחור מבריק" },
-  { id: "pastel-pink", name: "פסטל ורוד", tag: "", gradient: "linear-gradient(135deg, #FFD6E0, #FFB6C7)", accent: "#FF3D8B", desc: "רך, נשי, יוקרתי" },
-  { id: "gradient-pop", name: "גרדיאנט נועז", tag: "חדש", gradient: "linear-gradient(135deg, #3D4BFF, #B040E0, #FF3D8B)", accent: "#B040E0", desc: "צבעוני, אנרגטי, סקרולי" },
+  {
+    id: "studio-white",
+    name: "סטודיו לבן",
+    tag: "הכי פופולרי",
+    gradient: "linear-gradient(135deg, #f8f8f8, #e0e0e0)",
+    accent: "#fff",
+    desc: "רקע לבן נקי, צל רך",
+    available: true,
+  },
+  {
+    id: "lifestyle",
+    name: "לייפסטייל",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #FFD8C2, #F4A584)",
+    accent: "#FF8A47",
+    desc: "סצנה אותנטית עם תאורת יום",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "outdoor",
+    name: "חוץ / טבע",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #88C9A1, #4B9F7C)",
+    accent: "#25D396",
+    desc: "רקע ירוק, אור שמש",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "marble",
+    name: "שיש מבריק",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #F0EDE8, #C8C1B5)",
+    accent: "#C8C1B5",
+    desc: "משטח שיש מהודר",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "sunset",
+    name: "שקיעה חמה",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #FFB36E, #FF6B6B, #B040E0)",
+    accent: "#FF6B6B",
+    desc: "גרדיאנט חם וזוהר",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "dark-luxe",
+    name: "דארק לקס",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #1a1a2e, #16213e)",
+    accent: "#0E0B17",
+    desc: "רקע שחור מבריק",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "pastel-pink",
+    name: "פסטל ורוד",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #FFD6E0, #FFB6C7)",
+    accent: "#FF3D8B",
+    desc: "רך, נשי, יוקרתי",
+    available: false,
+    comingSoon: true,
+  },
+  {
+    id: "gradient-pop",
+    name: "גרדיאנט נועז",
+    tag: "Coming Soon",
+    gradient: "linear-gradient(135deg, #3D4BFF, #B040E0, #FF3D8B)",
+    accent: "#B040E0",
+    desc: "צבעוני, אנרגטי, סקרולי",
+    available: false,
+    comingSoon: true,
+  },
 ];
 
 export const RECENT_BATCHES: Batch[] = [

@@ -23,6 +23,26 @@ LIGHT-COLORED / WHITE PRODUCT VISIBILITY (CRITICAL — must be applied for every
 - Render every contour, handle, ridge, indentation, cap, label, button, screw, seam, and edge that exists in the source. Do NOT crop, slice, cut off, simplify, or erase any part of the product silhouette.
 - NEVER leave white "holes" inside the product (e.g., a missing patch on a bottle or a fading area on a panel). Every pixel that should be product = product. Every pixel that should be background = pure white.`;
 
+const BACKGROUND_REMOVAL_BLOCK = `
+BACKGROUND REMOVAL (CRITICAL — must follow):
+- Completely remove the original background, environment, floor, wall, scenery, props, hands, people, packaging clutter, watermarks, and any non-product elements.
+- Isolate the product cleanly with sharp, natural edges — no halos, no leftover background fragments, no colored fringes around the silhouette.
+- Place the fully isolated product on a pure white #FFFFFF professional studio background.
+- Center and arrange the product beautifully with balanced composition and a soft contact shadow underneath.`;
+
+const KEEP_PROPORTION_BLOCK = `
+PROPORTION PRESERVATION (CRITICAL — must follow):
+- Maintain the EXACT aspect ratio and relative proportions of the product as shown in the source image.
+- Do NOT stretch, squash, widen, narrow, flatten, or distort the product in any dimension.
+- The product's width-to-height ratio must remain identical to the source — only reposition and resize uniformly (scale up/down equally) to fit the frame with white margins.
+- Preserve the product's relative visual size within the frame: if the source shows a tall narrow bottle, keep it tall and narrow; if wide and flat, keep it wide and flat.`;
+
+const LIGHT_TOUCH_BLOCK = `
+BACKGROUND TREATMENT (user chose to keep background):
+- Do NOT fully remove the original background. Clean it up and make it more professional, but preserve the general environment and context from the source.
+- Reduce clutter, distractions, and messy elements while keeping the scene recognizable.
+- Still improve lighting, sharpness, and overall presentation.`;
+
 const COMPOSITION_BLOCK = `
 COMPOSITION & PRESENTATION (must follow — applies to EVERY image):
 - Photograph the product in a clean, professional e-commerce hero-shot style (think Amazon main image, Apple product page, IKEA, Williams Sonoma, premium Shopify cards).
@@ -341,6 +361,10 @@ export async function POST(req: NextRequest) {
     const mode = ((form.get("mode") as string | null) || "single") as
       | "single"
       | "group";
+    const removeBackground =
+      (form.get("removeBackground") as string | null) !== "0";
+    const keepProportion =
+      (form.get("keepProportion") as string | null) !== "0";
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -381,6 +405,16 @@ export async function POST(req: NextRequest) {
       const basePrompt = mode === "group" ? GROUP_PROMPT : SINGLE_PROMPT;
       prompt =
         customPrompt && customPrompt.length > 5 ? customPrompt : basePrompt;
+
+      if (removeBackground) {
+        prompt += `\n\n${BACKGROUND_REMOVAL_BLOCK}`;
+      } else {
+        prompt += `\n\n${LIGHT_TOUCH_BLOCK}`;
+      }
+
+      if (keepProportion) {
+        prompt += `\n\n${KEEP_PROPORTION_BLOCK}`;
+      }
 
       if (padding > 0) {
         const productPercent = Math.max(30, 100 - padding * 2);

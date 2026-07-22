@@ -4,8 +4,11 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Icons } from "./icons";
 import {
   type Category,
+  type CustomBackedProduct,
   type HistoryBatch,
   type ShopifyBackedProduct,
+  type StoreBackedProduct,
+  type ProcessingOptions,
   PRESETS,
 } from "./data";
 import { createClient } from "@/lib/supabase/client";
@@ -32,17 +35,28 @@ import {
 } from "./screens-app";
 import { RegisterScreen } from "./screens-register";
 import {
-  clearConnection,
-  getConnection,
   listCollections,
   listProducts,
   uploadProductImage,
   type ShopifyCollection,
-  type ShopifyConnection,
   type ShopifyProduct,
 } from "@/lib/shopify-client";
+import {
+  listCustomApiProducts,
+  stableProductId,
+  uploadCustomApiProductImage,
+  type CustomApiProduct,
+} from "@/lib/custom-api-client";
+import {
+  clearStoreConnection,
+  getConnectionLabel,
+  getConnectionPlatformLabel,
+  getStoreConnection,
+  type StoreConnection,
+} from "@/lib/store-connection";
 import type { Quality } from "@/lib/pricing";
 import { loadBatchHistory, persistBatch, repairBatchHistoryNames } from "@/lib/batch-history";
+import { markItemPublished } from "@/lib/publish-tracker";
 import { isLegacyBatchProductName } from "@/lib/product-name-resolver";
 
 type Stage = "login" | "register" | "onboarding" | "connect" | "app";
@@ -76,6 +90,31 @@ function mapShopifyToProducts(
     .filter((p): p is ShopifyBackedProduct => p !== null);
 }
 
+function mapCustomApiToProducts(
+  products: CustomApiProduct[]
+): CustomBackedProduct[] {
+  return products
+    .map((p): CustomBackedProduct | null => {
+      const imageUrl =
+        p.image_url ||
+        p.images?.find((img) => img.url)?.url ||
+        p.images?.[0]?.url;
+      if (!imageUrl) return null;
+      return {
+        id: stableProductId(p.id),
+        externalId: p.id,
+        name: p.title,
+        price: 0,
+        category: "all",
+        img: "",
+        optimized: false,
+        isCustomApi: true,
+        imageUrl,
+      };
+    })
+    .filter((p): p is CustomBackedProduct => p !== null);
+}
+
 function mapShopifyCollections(collections: ShopifyCollection[]): Category[] {
   return collections.map((c) => ({
     id: String(c.id),
@@ -88,7 +127,7 @@ function mapShopifyCollections(collections: ShopifyCollection[]): Category[] {
 export default function PixaApp() {
   const [stage, setStage] = useState<Stage>("register");
   const [route, setRoute] = useState<AppRoute>("dashboard");
-  const [connection, setConnection] = useState<ShopifyConnection | null>(null);
+  const [connection, setConnection] = useState<StoreConnection | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -107,6 +146,11 @@ export default function PixaApp() {
   const [showPresetModal, setShowPresetModal] = useState(false);
   const [showProcessing, setShowProcessing] = useState(false);
   const [activePreset, setActivePreset] = useState<string>("studio-white");
+  const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>({
+    presetId: "studio-white",
+    removeBackground: true,
+    keepProportion: true,
+  });
   const processingQuality: Quality = "low";
   const [processingProducts, setProcessingProducts] = useState<AnyProduct[]>(
     []
@@ -116,10 +160,10 @@ export default function PixaApp() {
   const [batchHistory, setBatchHistory] = useState<HistoryBatch[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
-  // Live Shopify catalog state.
-  const [shopifyProducts, setShopifyProducts] = useState<
-    ShopifyBackedProduct[]
-  >([]);
+  // Live store catalog (Shopify or custom API).
+  const [shopifyProducts, setShopifyProducts] = useState<StoreBackedProduct[]>(
+    []
+  );
   const [shopifyCategories, setShopifyCategories] = useState<Category[]>([]);
   const [shopifyCatalogTotal, setShopifyCatalogTotal] = useState(0);
   const [loadingShopify, setLoadingShopify] = useState(false);
@@ -141,7 +185,7 @@ export default function PixaApp() {
       setUserEmail(s?.user?.email ?? null);
       setAuthChecked(true);
       if (s) {
-        const stored = getConnection();
+        const stored = getStoreConnection();
         if (stored) setConnection(stored);
         // Stage is decided by a separate effect once we know whether the
         // user has completed the brand-avatar wizard.
@@ -225,12 +269,21 @@ export default function PixaApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Load Shopify catalog whenever connection changes ---------- */
+  /* ---------- Load store catalog whenever connection changes ---------- */
   const loadShopifyCatalog = useCallback(
-    async (conn: ShopifyConnection, collectionId?: string) => {
+    async (conn: StoreConnection, collectionId?: string) => {
       setLoadingShopify(true);
       setShopifyError(null);
       try {
+        if (conn.platform === "custom-api") {
+          const { products } = await listCustomApiProducts(conn);
+          const mapped = mapCustomApiToProducts(products);
+          setShopifyProducts(mapped);
+          setShopifyCatalogTotal(mapped.length);
+          setShopifyCategories([]);
+          return;
+        }
+
         const collectionNum =
           collectionId && collectionId !== "all"
             ? Number(collectionId)
@@ -337,14 +390,13 @@ export default function PixaApp() {
     // Effect above will route them to "connect" or "app".
   };
 
-  const handleConnected = async (conn: ShopifyConnection) => {
+  const handleConnected = async (conn: StoreConnection) => {
     setConnection(conn);
     setStage("app");
     setRoute("dashboard");
-    pushToast(`החנות "${conn.shopName || conn.shop}" חוברה בהצלחה!`);
+    pushToast(`החנות "${getConnectionLabel(conn)}" חוברה בהצלחה!`);
 
-    // Mirror the connection to Supabase so we have a record per user.
-    if (session?.user?.id) {
+    if (session?.user?.id && conn.platform === "shopify") {
       const supabase = createClient();
       await supabase
         .from("shopify_connections")
@@ -373,7 +425,7 @@ export default function PixaApp() {
   };
 
   const handleLogout = async () => {
-    clearConnection();
+    clearStoreConnection();
     setConnection(null);
     setShopifyProducts([]);
     setShopifyCategories([]);
@@ -386,12 +438,11 @@ export default function PixaApp() {
   };
 
   const handleDisconnectShopify = () => {
-    if (
-      !confirm("להתנתק מ-Shopify? תצטרך לחבר מחדש כדי לסנכרן מוצרים.")
-    ) {
+    const label = connection ? getConnectionPlatformLabel(connection) : "החנות";
+    if (!confirm(`להתנתק מ-${label}? תצטרך לחבר מחדש כדי לסנכרן מוצרים.`)) {
       return;
     }
-    clearConnection();
+    clearStoreConnection();
     setConnection(null);
     setShopifyProducts([]);
     setShopifyCategories([]);
@@ -465,8 +516,9 @@ export default function PixaApp() {
     setShowPresetModal(true);
   };
 
-  const confirmPreset = (presetId: string) => {
-    setActivePreset(presetId);
+  const confirmPreset = (options: ProcessingOptions) => {
+    setActivePreset(options.presetId);
+    setProcessingOptions(options);
     const items = allAvailable.filter((p) => pendingBatchIds.includes(p.id));
     if (items.length === 0) {
       pushToast("לא נבחרו מוצרים לעיבוד");
@@ -527,6 +579,12 @@ export default function PixaApp() {
         status: r.error ? "failed" : "success",
         error: r.error,
         shopifyProductId: r.isShopify ? r.productId : undefined,
+        externalProductId: r.externalProductId,
+        sourceType: r.isCustomApi
+          ? "custom-api"
+          : r.isShopify
+            ? "shopify"
+            : "upload",
       })),
     };
 
@@ -539,7 +597,7 @@ export default function PixaApp() {
         activePreset,
         processingQuality,
         batchId,
-        connection?.shop
+        connection?.platform === "shopify" ? connection.shop : undefined
       )
         .then((saved) => {
           if (!saved) return;
@@ -551,9 +609,14 @@ export default function PixaApp() {
           console.error("[pixa] failed to persist batch history", err);
         });
     }
-  }, [activePreset, session?.user?.id, connection?.shop, processingQuality]);
+  }, [
+    activePreset,
+    session?.user?.id,
+    connection?.platform === "shopify" ? connection.shop : undefined,
+    processingQuality,
+  ]);
 
-  /* ---------- Publish back to Shopify ---------- */
+  /* ---------- Publish back to connected store ---------- */
   const publishResults = async (approvedIds: number[]) => {
     const toPublish = results.filter(
       (r) => approvedIds.includes(r.productId) && r.isReal && !r.error
@@ -563,7 +626,6 @@ export default function PixaApp() {
       return;
     }
 
-    // If not connected to Shopify → just download every approved result.
     if (!connection) {
       for (const r of toPublish) {
         const a = document.createElement("a");
@@ -581,11 +643,12 @@ export default function PixaApp() {
 
     let ok = 0;
     let failed = 0;
-    const publishedShopifyIds = new Map<number, string>();
+    const publishedImageUrls = new Map<number, string>();
+    const platformLabel = getConnectionPlatformLabel(connection);
+
     for (const r of toPublish) {
-      if (!r.isShopify || !r.afterBase64) {
-        // It's a manual upload, not tied to a Shopify product.
-        // We can only download it (there's no productId to attach it to).
+      const publishable = (r.isShopify || r.isCustomApi) && r.afterBase64;
+      if (!publishable) {
         const a = document.createElement("a");
         a.href = r.afterUrl;
         a.download = `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`;
@@ -594,17 +657,36 @@ export default function PixaApp() {
         document.body.removeChild(a);
         continue;
       }
+
       try {
-        const uploadRes = await uploadProductImage(connection, {
-          productId: r.productId,
-          base64: r.afterBase64,
-          filename: `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`,
-          alt: r.name,
-          replaceOriginal: true,
-        });
+        if (connection.platform === "shopify" && r.isShopify) {
+          const uploadRes = await uploadProductImage(connection, {
+            productId: r.productId,
+            base64: r.afterBase64!,
+            filename: `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`,
+            alt: r.name,
+            replaceOriginal: true,
+          });
         if (uploadRes.image?.src) {
-          publishedShopifyIds.set(r.productId, uploadRes.image.src);
+          publishedImageUrls.set(r.productId, uploadRes.image.src);
         }
+        markItemPublished("", r.afterUrl);
+      } else if (
+          connection.platform === "custom-api" &&
+          r.isCustomApi &&
+          r.externalProductId
+        ) {
+          const uploadRes = await uploadCustomApiProductImage(connection, {
+            productId: r.externalProductId,
+            base64: r.afterBase64!,
+            filename: `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`,
+            alt: r.name,
+          });
+        if (uploadRes.newImageUrl) {
+          publishedImageUrls.set(r.productId, uploadRes.newImageUrl);
+        }
+        markItemPublished("", r.afterUrl);
+      }
         ok += 1;
       } catch (e) {
         console.error("publish failed", e);
@@ -612,10 +694,10 @@ export default function PixaApp() {
       }
     }
 
-    if (publishedShopifyIds.size > 0) {
+    if (publishedImageUrls.size > 0) {
       setShopifyProducts((prev) =>
         prev.map((p) => {
-          const src = publishedShopifyIds.get(p.id);
+          const src = publishedImageUrls.get(p.id);
           if (!src) return p;
           return { ...p, optimized: true, imageUrl: src };
         })
@@ -623,7 +705,7 @@ export default function PixaApp() {
     }
 
     if (ok > 0 && failed === 0) {
-      pushToast(`${ok} תמונות פורסמו ל-Shopify בהצלחה!`);
+      pushToast(`${ok} תמונות פורסמו ל-${platformLabel} בהצלחה!`);
     } else if (ok > 0 && failed > 0) {
       pushToast(`${ok} פורסמו · ${failed} נכשלו`);
     } else {
@@ -635,7 +717,6 @@ export default function PixaApp() {
       prev.forEach((u) => URL.revokeObjectURL(u.fileUrl));
       return [];
     });
-    // Refresh catalog so the optimized flag/images update.
     if (connection) loadShopifyCatalog(connection);
     setRoute("history");
   };
@@ -716,10 +797,9 @@ export default function PixaApp() {
         onNav={handleNav}
         onLogout={handleLogout}
         storeName={
-          connection?.shopName ||
+          (connection && getConnectionLabel(connection)) ||
           profileName ||
           userEmail ||
-          connection?.shop ||
           undefined
         }
         productsCount={productsCountForSidebar}
@@ -740,6 +820,9 @@ export default function PixaApp() {
             batchHistory={batchHistory}
             shopifyProducts={shopifyProducts}
             connected={!!connection}
+            storePlatform={
+              connection ? getConnectionPlatformLabel(connection) : undefined
+            }
             onStartBatch={() => startBatch()}
             onConnect={() => setStage("connect")}
             onGoToProducts={() => setRoute("products")}
@@ -770,7 +853,26 @@ export default function PixaApp() {
             hideBulkBar={showPresetModal || showProcessing}
           />
         )}
-        {route === "history" && <HistoryScreen batches={batchHistory} />}
+        {route === "history" && (
+          <HistoryScreen
+            batches={batchHistory}
+            connection={connection}
+            storeProducts={shopifyProducts}
+            onToast={pushToast}
+            onPublishComplete={(publishedProductIds) => {
+              if (publishedProductIds.size > 0) {
+                setShopifyProducts((prev) =>
+                  prev.map((p) => {
+                    const src = publishedProductIds.get(p.id);
+                    if (!src) return p;
+                    return { ...p, optimized: true, imageUrl: src };
+                  })
+                );
+              }
+              if (connection) loadShopifyCatalog(connection);
+            }}
+          />
+        )}
         {route === "settings" && (
           <SettingsScreen
             onLogout={handleLogout}
@@ -804,6 +906,7 @@ export default function PixaApp() {
           key={processingProducts.map((p) => p.id).join("-")}
           products={processingProducts}
           presetId={activePreset}
+          processingOptions={processingOptions}
           quality={processingQuality}
           onDone={finishProcessing}
         />

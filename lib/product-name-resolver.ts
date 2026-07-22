@@ -1,4 +1,4 @@
-import type { ShopifyBackedProduct } from "@/components/pixa/data";
+import type { StoreBackedProduct } from "@/components/pixa/data";
 
 const AFTER_MAP_KEY = "pixa:after-product-map";
 const FP_SIZE = 32;
@@ -78,7 +78,7 @@ function fingerprintDistance(a: number[], b: number[]): number {
 const shopifyFingerprintCache = new Map<string, number[]>();
 
 async function shopifyFingerprint(
-  product: ShopifyBackedProduct
+  product: StoreBackedProduct
 ): Promise<number[] | null> {
   const cached = shopifyFingerprintCache.get(product.imageUrl);
   if (cached) return cached;
@@ -88,7 +88,7 @@ async function shopifyFingerprint(
 }
 
 export async function preloadShopifyFingerprints(
-  shopifyProducts: ShopifyBackedProduct[]
+  shopifyProducts: StoreBackedProduct[]
 ): Promise<void> {
   const chunk = 40;
   for (let i = 0; i < shopifyProducts.length; i += chunk) {
@@ -100,14 +100,14 @@ export async function preloadShopifyFingerprints(
 
 export async function matchShopifyProductByAfterImage(
   afterUrl: string,
-  shopifyProducts: ShopifyBackedProduct[]
-): Promise<ShopifyBackedProduct | null> {
+  shopifyProducts: StoreBackedProduct[]
+): Promise<StoreBackedProduct | null> {
   if (!afterUrl || shopifyProducts.length === 0) return null;
 
   const afterFp = await grayscaleFingerprint(afterUrl);
   if (!afterFp) return null;
 
-  let best: ShopifyBackedProduct | null = null;
+  let best: StoreBackedProduct | null = null;
   let bestDist = Infinity;
   let secondDist = Infinity;
 
@@ -142,7 +142,7 @@ export async function resolveShopifyProductName(
   beforeUrl: string | undefined,
   productName: string,
   shopifyProductId: number | undefined,
-  shopifyProducts: ShopifyBackedProduct[]
+  shopifyProducts: StoreBackedProduct[]
 ): Promise<{ name: string; shopifyProductId?: number } | null> {
   if (shopifyProductId && shopifyProducts.length > 0) {
     const byId = shopifyProducts.find((p) => p.id === shopifyProductId);

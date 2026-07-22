@@ -4,11 +4,15 @@ import React, { useEffect, useState } from "react";
 import { Icons } from "./icons";
 import { fmtDate } from "./data";
 import {
-  saveConnection,
   validateConnection,
   normalizeShopDomain,
-  type ShopifyConnection,
 } from "@/lib/shopify-client";
+import { validateCustomApiConnection } from "@/lib/custom-api-client";
+import {
+  saveStoreConnection,
+  type StoreConnection,
+  type StorePlatform,
+} from "@/lib/store-connection";
 import { authErrorToHebrew, signInWithPassword } from "@/lib/supabase/auth";
 
 const I = Icons;
@@ -603,30 +607,27 @@ export const Spinner: React.FC<{ size?: number }> = ({ size = 16 }) => (
 );
 
 /* ============================================================
-   CONNECT — Shopify flow
+   CONNECT — Shopify + Lovable / Custom API
    ============================================================ */
 
 export const ConnectScreen: React.FC<{
-  onConnected: (conn: ShopifyConnection) => void;
+  onConnected: (conn: StoreConnection) => void;
   onSkip?: () => void;
 }> = ({ onConnected, onSkip }) => {
+  const [platform, setPlatform] = useState<StorePlatform>("shopify");
   const [store, setStore] = useState("");
   const [token, setToken] = useState("");
+  const [apiUrl, setApiUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [stage, setStage] = useState<"input" | "connecting" | "success">(
     "input"
   );
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [shopName, setShopName] = useState<string>("");
+  const [connectedName, setConnectedName] = useState<string>("");
 
   const connect = async () => {
-    const s = store.trim();
-    const t = token.trim();
-    if (!s || !t) {
-      setError("חסר שם חנות או Access Token");
-      return;
-    }
     setError(null);
     setStage("connecting");
     setProgress(8);
@@ -638,18 +639,56 @@ export const ConnectScreen: React.FC<{
     }, 280);
 
     try {
-      const res = await validateConnection(s, t);
+      if (platform === "shopify") {
+        const s = store.trim();
+        const t = token.trim();
+        if (!s || !t) {
+          clearInterval(ticker);
+          setError("חסר שם חנות או Access Token");
+          setStage("input");
+          return;
+        }
+
+        const res = await validateConnection(s, t);
+        clearInterval(ticker);
+        setProgress(100);
+
+        const conn: StoreConnection = {
+          platform: "shopify",
+          shop: normalizeShopDomain(res.domain || s),
+          token: t,
+          shopName: res.shopName,
+          connectedAt: Date.now(),
+        };
+        saveStoreConnection(conn);
+        setConnectedName(res.shopName);
+        setStage("success");
+        setTimeout(() => onConnected(conn), 900);
+        return;
+      }
+
+      const url = apiUrl.trim();
+      const key = apiKey.trim();
+      if (!url || !key) {
+        clearInterval(ticker);
+        setError("חסר כתובת API או API Key");
+        setStage("input");
+        return;
+      }
+
+      const res = await validateCustomApiConnection(url, key);
       clearInterval(ticker);
       setProgress(100);
 
-      const conn: ShopifyConnection = {
-        shop: normalizeShopDomain(res.domain || s),
-        token: t,
-        shopName: res.shopName,
+      const conn: StoreConnection = {
+        platform: "custom-api",
+        apiUrl: url,
+        apiKey: key,
+        storeName: res.storeName,
         connectedAt: Date.now(),
       };
-      saveConnection(conn);
-      setShopName(res.shopName);
+      saveStoreConnection(conn);
+      setConnectedName(res.storeName);
       setStage("success");
       setTimeout(() => onConnected(conn), 900);
     } catch (e) {
@@ -693,91 +732,211 @@ export const ConnectScreen: React.FC<{
               style={{
                 fontSize: 16,
                 lineHeight: 1.6,
-                marginBottom: 32,
+                marginBottom: 24,
                 maxWidth: 460,
               }}
             >
-              הזן את כתובת החנות שלך ואת ה-Access Token של אפליקציית ה-Admin
-              בתוך Shopify. אנחנו לא שומרים את הטוקן בשרת – הוא נשמר רק במכשיר
-              שלך.
+              {platform === "shopify"
+                ? "הזן את כתובת החנות שלך ואת ה-Access Token של אפליקציית ה-Admin בתוך Shopify. הטוקן נשמר רק במכשיר שלך."
+                : "חבר אתר Lovable עם מוצרים ב-Supabase. הזן את כתובת ה-Edge Function ואת ה-API Key שיצרת בפרויקט."}
             </p>
 
             <div
               style={{
                 display: "flex",
-                alignItems: "stretch",
-                gap: 0,
+                gap: 8,
+                marginBottom: 24,
                 background: "var(--bg-card)",
                 border: "1px solid var(--hair-2)",
-                borderRadius: 14,
-                paddingInlineEnd: 6,
-                marginBottom: 12,
+                borderRadius: 12,
+                padding: 4,
               }}
             >
-              <input
-                type="text"
-                value={store}
-                onChange={(e) => setStore(e.target.value)}
-                placeholder="my-store"
-                style={{
-                  flex: 1,
-                  height: 60,
-                  background: "transparent",
-                  border: 0,
-                  outline: "none",
-                  color: "var(--ink)",
-                  fontSize: 17,
-                  padding: "0 18px",
-                  direction: "ltr",
-                  textAlign: "left",
-                  fontFamily: "'Anek Hebrew', 'Heebo', sans-serif",
-                  fontWeight: 600,
-                }}
-              />
-              <span
-                style={{
-                  alignSelf: "center",
-                  color: "var(--ink-3)",
-                  fontSize: 14,
-                  paddingInlineEnd: 14,
-                  direction: "ltr",
-                  fontFamily: "'Anek Hebrew', 'Heebo', sans-serif",
-                }}
-              >
-                .myshopify.com
-              </span>
+              {(
+                [
+                  { id: "shopify" as const, label: "Shopify", icon: I.Shopify },
+                  { id: "custom-api" as const, label: "Lovable / API", icon: I.Globe },
+                ] as const
+              ).map((tab) => {
+                const TabIcon = tab.icon as React.FC<{ size?: number }>;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setPlatform(tab.id);
+                      setError(null);
+                      setShowHelp(false);
+                    }}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      height: 44,
+                      borderRadius: 8,
+                      border: 0,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      background:
+                        platform === tab.id ? "var(--grad)" : "transparent",
+                      color: platform === tab.id ? "#fff" : "var(--ink-3)",
+                      transition: "all .2s",
+                    }}
+                  >
+                    <TabIcon size={16} />
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
 
-            <div
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--hair-2)",
-                borderRadius: 14,
-                marginBottom: 14,
-              }}
-            >
-              <input
-                type="password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder="shpat_••••••••••••••••••••••••"
-                style={{
-                  width: "100%",
-                  height: 60,
-                  background: "transparent",
-                  border: 0,
-                  outline: "none",
-                  color: "var(--ink)",
-                  fontSize: 15,
-                  padding: "0 18px",
-                  direction: "ltr",
-                  textAlign: "left",
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontWeight: 500,
-                  letterSpacing: "0.05em",
-                }}
-              />
-            </div>
+            {platform === "shopify" ? (
+              <>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "stretch",
+                    gap: 0,
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--hair-2)",
+                    borderRadius: 14,
+                    paddingInlineEnd: 6,
+                    marginBottom: 12,
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={store}
+                    onChange={(e) => setStore(e.target.value)}
+                    placeholder="my-store"
+                    style={{
+                      flex: 1,
+                      height: 60,
+                      background: "transparent",
+                      border: 0,
+                      outline: "none",
+                      color: "var(--ink)",
+                      fontSize: 17,
+                      padding: "0 18px",
+                      direction: "ltr",
+                      textAlign: "left",
+                      fontFamily: "'Anek Hebrew', 'Heebo', sans-serif",
+                      fontWeight: 600,
+                    }}
+                  />
+                  <span
+                    style={{
+                      alignSelf: "center",
+                      color: "var(--ink-3)",
+                      fontSize: 14,
+                      paddingInlineEnd: 14,
+                      direction: "ltr",
+                      fontFamily: "'Anek Hebrew', 'Heebo', sans-serif",
+                    }}
+                  >
+                    .myshopify.com
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--hair-2)",
+                    borderRadius: 14,
+                    marginBottom: 14,
+                  }}
+                >
+                  <input
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="shpat_••••••••••••••••••••••••"
+                    style={{
+                      width: "100%",
+                      height: 60,
+                      background: "transparent",
+                      border: 0,
+                      outline: "none",
+                      color: "var(--ink)",
+                      fontSize: 15,
+                      padding: "0 18px",
+                      direction: "ltr",
+                      textAlign: "left",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontWeight: 500,
+                      letterSpacing: "0.05em",
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--hair-2)",
+                    borderRadius: 14,
+                    marginBottom: 12,
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={apiUrl}
+                    onChange={(e) => setApiUrl(e.target.value)}
+                    placeholder="https://xxx.supabase.co/functions/v1/photospro-api"
+                    style={{
+                      width: "100%",
+                      height: 60,
+                      background: "transparent",
+                      border: 0,
+                      outline: "none",
+                      color: "var(--ink)",
+                      fontSize: 14,
+                      padding: "0 18px",
+                      direction: "ltr",
+                      textAlign: "left",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontWeight: 500,
+                    }}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    background: "var(--bg-card)",
+                    border: "1px solid var(--hair-2)",
+                    borderRadius: 14,
+                    marginBottom: 14,
+                  }}
+                >
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="API Key (PHOTOSPRO_API_KEY)"
+                    style={{
+                      width: "100%",
+                      height: 60,
+                      background: "transparent",
+                      border: 0,
+                      outline: "none",
+                      color: "var(--ink)",
+                      fontSize: 15,
+                      padding: "0 18px",
+                      direction: "ltr",
+                      textAlign: "left",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontWeight: 500,
+                      letterSpacing: "0.05em",
+                    }}
+                  />
+                </div>
+              </>
+            )}
 
             <button
               type="button"
@@ -794,9 +953,11 @@ export const ConnectScreen: React.FC<{
                 textUnderlineOffset: 4,
               }}
             >
-              איפה משיגים את ה-Access Token? {showHelp ? "▲" : "▼"}
+              {platform === "shopify"
+                ? `איפה משיגים את ה-Access Token? ${showHelp ? "▲" : "▼"}`
+                : `איך מכינים את ה-API ב-Lovable? ${showHelp ? "▲" : "▼"}`}
             </button>
-            {showHelp && (
+            {showHelp && platform === "shopify" && (
               <div
                 style={{
                   background: "var(--bg-card)",
@@ -839,6 +1000,48 @@ export const ConnectScreen: React.FC<{
                 </ol>
               </div>
             )}
+            {showHelp && platform === "custom-api" && (
+              <div
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--hair)",
+                  borderRadius: 12,
+                  padding: 16,
+                  fontSize: 13,
+                  color: "var(--ink-2)",
+                  lineHeight: 1.7,
+                  marginBottom: 18,
+                }}
+              >
+                <ol
+                  style={{
+                    margin: 0,
+                    paddingInlineStart: 20,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  <li>
+                    ב-Lovable, בקש מה-AI ליצור Edge Function בשם{" "}
+                    <span className="mono">photospro-api</span>
+                  </li>
+                  <li>
+                    ה-API צריך לתמוך ב-<span className="mono">GET /products</span>{" "}
+                    ו-<span className="mono">PUT /products/:id/image</span>
+                  </li>
+                  <li>
+                    ב-<span className="mono">Cloud → Secrets</span> הוסף{" "}
+                    <span className="mono">PHOTOSPRO_API_KEY</span> (מפתח סודי)
+                  </li>
+                  <li>
+                    העתק את כתובת ה-Function (למשל{" "}
+                    <span className="mono">.../functions/v1/photospro-api</span>)
+                  </li>
+                  <li>הדבק כאן את הכתובת ואת ה-API Key שיצרת</li>
+                </ol>
+              </div>
+            )}
 
             {error && (
               <div
@@ -862,7 +1065,15 @@ export const ConnectScreen: React.FC<{
               onClick={connect}
               style={{ width: "100%" }}
             >
-              <I.Shopify size={18} /> חבר את חנות Shopify
+              {platform === "shopify" ? (
+                <>
+                  <I.Shopify size={18} /> חבר את חנות Shopify
+                </>
+              ) : (
+                <>
+                  <I.Globe size={18} /> חבר אתר Lovable / API
+                </>
+              )}
             </button>
 
             {onSkip && (
@@ -935,7 +1146,11 @@ export const ConnectScreen: React.FC<{
               style={{ fontSize: 13, marginBottom: 32 }}
               dir="ltr"
             >
-              {store.includes(".") ? store : `${store}.myshopify.com`}
+              {platform === "shopify"
+                ? store.includes(".")
+                  ? store
+                  : `${store}.myshopify.com`
+                : apiUrl || "API"}
             </p>
             <div style={{ maxWidth: 380, margin: "0 auto" }}>
               <div className="progress">
@@ -982,7 +1197,7 @@ export const ConnectScreen: React.FC<{
               <I.Check size={44} strokeWidth={2.5} />
             </div>
             <h2 className="h-2" style={{ marginTop: 28 }}>
-              {shopName ? `שלום, ${shopName}` : "החנות מחוברת."}
+              {connectedName ? `שלום, ${connectedName}` : "החנות מחוברת."}
             </h2>
             <p className="text-2">מעביר אותך לדשבורד…</p>
           </div>

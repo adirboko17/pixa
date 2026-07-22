@@ -9,17 +9,26 @@ import {
   fmtMonthYear,
   fmtRelativeTime,
   type Product,
+  type CustomBackedProduct,
   type ShopifyBackedProduct,
+  type StoreBackedProduct,
   type Category,
   type Preset,
   type HistoryBatch,
   type HistoryBatchItem,
+  type ProcessingOptions,
 } from "./data";
-import type { ShopifyConnection } from "@/lib/shopify-client";
+import type { StoreConnection } from "@/lib/store-connection";
+import { getConnectionPlatformLabel } from "@/lib/store-connection";
 import { type Quality, type ImageSize } from "@/lib/pricing";
 import { Spinner } from "./screens-shell";
 import { StarLoader } from "./StarLoader";
 import { BulkBar } from "./BulkBar";
+import { isItemPublished } from "@/lib/publish-tracker";
+import {
+  enrichHistoryItem,
+  publishHistoryItems,
+} from "@/lib/publish-to-store";
 import ImageViewer, { type ViewerImage } from "@/components/ImageViewer";
 import {
   isLegacyBatchProductName,
@@ -117,7 +126,7 @@ function resolveRecentItemTitle(
     productId: number;
     shopifyProductId?: number;
   },
-  shopifyProducts: ShopifyBackedProduct[]
+  shopifyProducts: StoreBackedProduct[]
 ): string {
   const shopifyId =
     item.shopifyProductId ?? (item.isShopify ? item.productId : undefined);
@@ -150,6 +159,7 @@ function historyToProcessedResults(
   name: string;
   isReal: boolean;
   isShopify: boolean;
+  isCustomApi: boolean;
   presetId?: string;
   shopifyProductId?: number;
   error?: string;
@@ -161,6 +171,7 @@ function historyToProcessedResults(
     name: string;
     isReal: boolean;
     isShopify: boolean;
+    isCustomApi: boolean;
     presetId?: string;
     shopifyProductId?: number;
     error?: string;
@@ -175,6 +186,7 @@ function historyToProcessedResults(
         name: item.productName,
         isReal: true,
         isShopify: !!item.shopifyProductId,
+        isCustomApi: false,
         presetId: batch.preset,
         shopifyProductId: item.shopifyProductId,
         error: item.status === "failed" ? item.error : undefined,
@@ -228,9 +240,11 @@ export const DashboardScreen: React.FC<{
   /** Persisted batches from Supabase — used for totals when session results are empty. */
   batchHistory?: HistoryBatch[];
   /** Shopify catalog — used to resolve product names in recent list. */
-  shopifyProducts?: ShopifyBackedProduct[];
-  /** Whether the user is connected to a Shopify store. */
+  shopifyProducts?: StoreBackedProduct[];
+  /** Whether the user is connected to a store. */
   connected: boolean;
+  /** Platform label for the connected store. */
+  storePlatform?: string;
   /** Optional CTA: take the user to the connect screen. */
   onConnect?: () => void;
   /** Optional CTA: take the user to the products tab to upload. */
@@ -244,6 +258,7 @@ export const DashboardScreen: React.FC<{
   batchHistory = [],
   shopifyProducts = [],
   connected,
+  storePlatform,
   onConnect,
   onGoToProducts,
 }) => {
@@ -480,7 +495,7 @@ export const DashboardScreen: React.FC<{
           <StatCell
             label="חיבור חנות"
             num={connected ? "פעיל" : "—"}
-            trend={connected ? "Shopify" : "לא מחובר"}
+            trend={connected ? storePlatform || "מחובר" : "לא מחובר"}
           />
         </div>
       </section>
@@ -958,7 +973,11 @@ export type UploadedProduct = Product & {
   file: File;
 };
 
-export type AnyProduct = Product | UploadedProduct | ShopifyBackedProduct;
+export type AnyProduct =
+  | Product
+  | UploadedProduct
+  | ShopifyBackedProduct
+  | CustomBackedProduct;
 
 export const isUploadedProduct = (p: AnyProduct): p is UploadedProduct =>
   "isUpload" in p && (p as UploadedProduct).isUpload === true;
@@ -966,14 +985,21 @@ export const isUploadedProduct = (p: AnyProduct): p is UploadedProduct =>
 export const isShopifyProduct = (p: AnyProduct): p is ShopifyBackedProduct =>
   "isShopify" in p && (p as ShopifyBackedProduct).isShopify === true;
 
+export const isCustomApiProduct = (p: AnyProduct): p is CustomBackedProduct =>
+  "isCustomApi" in p && (p as CustomBackedProduct).isCustomApi === true;
+
+export const isStoreBackedProduct = (
+  p: AnyProduct
+): p is StoreBackedProduct => isShopifyProduct(p) || isCustomApiProduct(p);
+
 export const ProductsScreen: React.FC<{
   selectedIds: number[];
   setSelectedIds: React.Dispatch<React.SetStateAction<number[]>>;
   onStartBatch: (ids: number[]) => void;
   uploads: UploadedProduct[];
   onAddUploads: (files: File[]) => void;
-  /** Real Shopify products. Empty when not connected or still loading. */
-  shopifyProducts: ShopifyBackedProduct[];
+  /** Real store products. Empty when not connected or still loading. */
+  shopifyProducts: StoreBackedProduct[];
   /** Real Shopify collections (used as category chips). */
   shopifyCategories: Category[];
   /** Total products in the full catalog (not the active collection filter). */
@@ -1051,7 +1077,7 @@ export const ProductsScreen: React.FC<{
   const filtered = useMemo(() => {
     const list = allProducts.filter((p) => {
       const inCategory =
-        category === "all" ? true : connected && isShopifyProduct(p);
+        category === "all" ? true : connected && isStoreBackedProduct(p);
       const inView =
         view === "all" ||
         (view === "new"
@@ -1347,7 +1373,7 @@ export const ProductsScreen: React.FC<{
                 החנות מחוברת אבל לא נמצאו מוצרים
               </p>
               <p style={{ fontSize: 13, lineHeight: 1.6, marginBottom: 24 }}>
-                ודא שיש מוצרים עם תמונות ב-Shopify, או העלה תמונות ידנית.
+                ודא שיש מוצרים עם תמונות בחנות, או העלה תמונות ידנית.
               </p>
               {onReloadShopify && (
                 <button className="btn btn-ghost" onClick={onReloadShopify}>
@@ -1366,10 +1392,10 @@ export const ProductsScreen: React.FC<{
           {filtered.map((p, i) => {
             const isSelected = selectedIds.includes(p.id);
             const upload = isUploadedProduct(p);
-            const shopify = isShopifyProduct(p);
+            const storeBacked = isStoreBackedProduct(p);
             const imgSrc = upload
               ? p.fileUrl
-              : shopify
+              : storeBacked
                 ? p.imageUrl
                 : buildImgUrl(p.img, 480);
             return (
@@ -1401,7 +1427,7 @@ export const ProductsScreen: React.FC<{
                 <div className="product-info">
                   <div className="product-name">{p.name}</div>
                   <div className="product-price">
-                    {upload || (shopify && !p.price)
+                    {upload || (storeBacked && !p.price)
                       ? "—"
                       : `₪${p.price.toLocaleString("he-IL")}`}
                   </div>
@@ -1504,13 +1530,14 @@ const CatalogSkeleton: React.FC = () => (
 export const PresetPickerModal: React.FC<{
   count: number;
   onClose: () => void;
-  onConfirm: (presetId: string) => void;
+  onConfirm: (options: ProcessingOptions) => void;
 }> = ({ count, onClose, onConfirm }) => {
   const [picked, setPicked] = useState<string>("studio-white");
-  const [tone, setTone] = useState<"minimal" | "balanced" | "vibrant">(
-    "balanced"
-  );
-  const [keepAspect, setKeepAspect] = useState(true);
+  const [removeBackground, setRemoveBackground] = useState(true);
+  const [keepProportion, setKeepProportion] = useState(true);
+
+  const pickedPreset = PRESETS.find((p) => p.id === picked);
+  const canStart = pickedPreset?.available !== false;
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -1533,86 +1560,87 @@ export const PresetPickerModal: React.FC<{
 
         <div className="modal-body modal-preset-body">
           <div className="preset-grid">
-            {PRESETS.map((preset, i) => (
-              <div
-                key={preset.id}
-                className={`preset ${picked === preset.id ? "selected" : ""}`}
-                onClick={() => setPicked(preset.id)}
-              >
+            {PRESETS.map((preset, i) => {
+              const locked = preset.available === false || preset.comingSoon;
+              return (
                 <div
-                  className="preset-thumb"
-                  style={{ background: preset.gradient }}
+                  key={preset.id}
+                  className={`preset ${picked === preset.id ? "selected" : ""}${
+                    locked ? " coming-soon" : ""
+                  }`}
+                  onClick={() => {
+                    if (!locked) setPicked(preset.id);
+                  }}
+                  aria-disabled={locked}
                 >
                   <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      display: "grid",
-                      placeItems: "center",
-                    }}
+                    className="preset-thumb"
+                    style={{ background: preset.gradient }}
                   >
                     <div
                       style={{
-                        width: "52%",
-                        height: "64%",
-                        borderRadius: 8,
-                        background: "rgba(0,0,0,.16)",
-                        boxShadow:
-                          "0 12px 30px -8px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.18)",
-                        transform: "rotate(-2deg)",
+                        position: "absolute",
+                        inset: 0,
+                        display: "grid",
+                        placeItems: "center",
                       }}
-                    />
+                    >
+                      <div
+                        style={{
+                          width: "52%",
+                          height: "64%",
+                          borderRadius: 8,
+                          background: "rgba(0,0,0,.16)",
+                          boxShadow:
+                            "0 12px 30px -8px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.18)",
+                          transform: "rotate(-2deg)",
+                        }}
+                      />
+                    </div>
+                    {preset.comingSoon ? (
+                      <span className="preset-tag preset-tag-soon">Coming Soon</span>
+                    ) : preset.tag ? (
+                      <span className="preset-tag">{preset.tag}</span>
+                    ) : null}
                   </div>
-                  {preset.tag && (
-                    <span className="preset-tag">{preset.tag}</span>
-                  )}
-                </div>
-                <div className="preset-meta">
-                  <div>
-                    <div className="preset-name">{preset.name}</div>
-                    <div className="preset-desc">{preset.desc}</div>
+                  <div className="preset-meta">
+                    <div>
+                      <div className="preset-name">{preset.name}</div>
+                      <div className="preset-desc">{preset.desc}</div>
+                    </div>
+                    <span className="preset-num">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
                   </div>
-                  <span className="preset-num">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <hr className="hr" style={{ margin: "18px 0" }} />
 
-          <div className="col-half">
-            <div>
-              <div className="eyebrow" style={{ marginBottom: 12 }}>
-                אווירה
-              </div>
-              <div className="tabs-line" style={{ display: "flex", gap: 28 }}>
-                {(
-                  [
-                    { id: "minimal", label: "מינימלי" },
-                    { id: "balanced", label: "מאוזן" },
-                    { id: "vibrant", label: "תוסס" },
-                  ] as const
-                ).map((t) => (
-                  <div
-                    key={t.id}
-                    className={`tab-line ${tone === t.id ? "active" : ""}`}
-                    onClick={() => setTone(t.id)}
-                  >
-                    {t.label}
-                  </div>
-                ))}
-              </div>
+          <div>
+            <div className="eyebrow" style={{ marginBottom: 12 }}>
+              הגדרות עיבוד
             </div>
-            <div>
-              <div className="eyebrow" style={{ marginBottom: 12 }}>
-                תוספות
-              </div>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
+              }}
+            >
               <ToggleRow
-                label="שמור על יחס מקור"
-                on={keepAspect}
-                setOn={setKeepAspect}
+                label="מחיקת רקע"
+                hint="הסר את הרקע המקורי וסדר את המוצר על רקע נקי"
+                on={removeBackground}
+                setOn={setRemoveBackground}
+              />
+              <ToggleRow
+                label="שמירה על פרופורציות המוצר"
+                hint="שמור על יחס הגובה-רוחב והגודל היחסי בתוך התמונה"
+                on={keepProportion}
+                setOn={setKeepProportion}
               />
             </div>
           </div>
@@ -1658,7 +1686,15 @@ export const PresetPickerModal: React.FC<{
             </button>
             <button
               className="btn btn-primary"
-              onClick={() => onConfirm(picked)}
+              disabled={!canStart}
+              onClick={() =>
+                onConfirm({
+                  presetId: picked,
+                  removeBackground,
+                  keepProportion,
+                })
+              }
+              style={{ opacity: canStart ? 1 : 0.5 }}
             >
               <II.Wand size={24} scale={1.5} /> התחל עיצוב
             </button>
@@ -1671,17 +1707,26 @@ export const PresetPickerModal: React.FC<{
 
 const ToggleRow: React.FC<{
   label: string;
+  hint?: string;
   on: boolean;
   setOn: React.Dispatch<React.SetStateAction<boolean>>;
-}> = ({ label, on, setOn }) => (
+}> = ({ label, hint, on, setOn }) => (
   <div
     style={{
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
+      gap: 16,
     }}
   >
-    <span style={{ fontSize: 13 }}>{label}</span>
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
+      {hint ? (
+        <div style={{ fontSize: 11.5, color: "var(--ink-3)", marginTop: 3 }}>
+          {hint}
+        </div>
+      ) : null}
+    </div>
     <button
       onClick={() => setOn((v) => !v)}
       style={{
@@ -1724,6 +1769,10 @@ export type ProcessedResult = {
   isReal: boolean;
   /** True iff this is backed by a real Shopify product → can be published. */
   isShopify: boolean;
+  /** True iff backed by a Lovable / custom API product. */
+  isCustomApi: boolean;
+  /** Remote product id for custom API publish. */
+  externalProductId?: string;
   /** Original Shopify product id (same as productId when isShopify). */
   shopifyImageId?: number;
   /** Any processing error message. */
@@ -1771,9 +1820,10 @@ function parseProcessedImage(data: {
 export const ProcessingOverlay: React.FC<{
   products: AnyProduct[];
   presetId: string;
+  processingOptions: ProcessingOptions;
   quality: Quality;
   onDone: (results: ProcessedResult[]) => void;
-}> = ({ products, presetId, quality, onDone }) => {
+}> = ({ products, presetId, processingOptions, quality, onDone }) => {
   const [progress, setProgress] = useState(0);
   const [doneIds, setDoneIds] = useState<number[]>([]);
   const [activeName, setActiveName] = useState<string>("");
@@ -1798,6 +1848,14 @@ export const ProcessingOverlay: React.FC<{
       form.append("size", size);
       form.append("mode", "single");
       form.append("preset", presetId);
+      form.append(
+        "removeBackground",
+        processingOptions.removeBackground ? "1" : "0"
+      );
+      form.append(
+        "keepProportion",
+        processingOptions.keepProportion ? "1" : "0"
+      );
 
       const res = await fetch("/api/process", {
         method: "POST",
@@ -1819,10 +1877,12 @@ export const ProcessingOverlay: React.FC<{
 
         const upload = isUploadedProduct(p);
         const shopify = isShopifyProduct(p);
+        const customApi = isCustomApiProduct(p);
+        const storeBacked = shopify || customApi;
 
         const beforeUrl = upload
           ? p.fileUrl
-          : shopify
+          : storeBacked
             ? p.imageUrl
             : buildImgUrl((p as Product).img, 600);
         let afterUrl = beforeUrl;
@@ -1839,7 +1899,7 @@ export const ProcessingOverlay: React.FC<{
             } else {
               errorMsg = "המודל לא החזיר תמונה";
             }
-          } else if (shopify) {
+          } else if (storeBacked) {
             setPhase("download");
             const safeName =
               p.name.replace(/[^\w\u0590-\u05FF]+/g, "_").slice(0, 80) ||
@@ -1870,8 +1930,10 @@ export const ProcessingOverlay: React.FC<{
           afterUrl,
           afterBase64,
           name: p.name,
-          isReal: upload || shopify,
+          isReal: upload || storeBacked,
           isShopify: shopify,
+          isCustomApi: customApi,
+          externalProductId: customApi ? p.externalId : undefined,
           shopifyImageId: shopify ? p.imageId : undefined,
           error: errorMsg,
         });
@@ -1887,7 +1949,7 @@ export const ProcessingOverlay: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [products, presetId, quality]);
+  }, [products, presetId, processingOptions, quality]);
 
   const pct = (progress / products.length) * 100;
 
@@ -2008,10 +2070,10 @@ export const ProcessingOverlay: React.FC<{
           {products.map((p) => {
             const done = doneIds.includes(p.id);
             const upload = isUploadedProduct(p);
-            const shopify = isShopifyProduct(p);
+            const storeBacked = isStoreBackedProduct(p);
             const imgSrc = upload
               ? p.fileUrl
-              : shopify
+              : storeBacked
                 ? p.imageUrl
                 : buildImgUrl((p as Product).img, 120);
             return (
@@ -2071,10 +2133,13 @@ export const ProcessingOverlay: React.FC<{
 export const ResultsScreen: React.FC<{
   results: ProcessedResult[];
   presetId: string;
-  connection: ShopifyConnection | null;
+  connection: StoreConnection | null;
   onPublish: (approvedIds: number[]) => void | Promise<void>;
   onBack: () => void;
 }> = ({ results, presetId, connection, onPublish, onBack }) => {
+  const platformLabel = connection
+    ? getConnectionPlatformLabel(connection)
+    : "החנות";
   const preset = PRESETS.find((p) => p.id === presetId);
   const [perCard, setPerCard] = useState<Record<number, "before" | "after">>(
     () =>
@@ -2463,7 +2528,12 @@ export const ResultsScreen: React.FC<{
             </>
           ) : connection ? (
             <>
-              <II.Shopify size={15} /> פרסם {approved} ל-Shopify
+              {connection.platform === "shopify" ? (
+                <II.Shopify size={15} />
+              ) : (
+                <II.Globe size={15} />
+              )}{" "}
+              פרסם {approved} ל-{platformLabel}
             </>
           ) : (
             <>
@@ -2528,8 +2598,21 @@ const Sum: React.FC<{ num: number; label: string; color: string }> = ({
 
 export const HistoryScreen: React.FC<{
   batches: HistoryBatch[];
-}> = ({ batches }) => {
+  connection?: StoreConnection | null;
+  storeProducts?: StoreBackedProduct[];
+  onPublishComplete?: (publishedProductIds: Map<number, string>) => void;
+  onToast?: (msg: string) => void;
+}> = ({
+  batches,
+  connection = null,
+  storeProducts = [],
+  onPublishComplete,
+  onToast,
+}) => {
   const [viewerImage, setViewerImage] = useState<ViewerImage | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [publishing, setPublishing] = useState(false);
+  const [publishTick, setPublishTick] = useState(0);
 
   const totalImages = useMemo(
     () =>
@@ -2552,6 +2635,86 @@ export const HistoryScreen: React.FC<{
       items,
     }));
   }, [batches]);
+
+  const enrichedBatches = useMemo(
+    () =>
+      batches.map((batch) => ({
+        ...batch,
+        items: expandBatchItems(batch).map((item) =>
+          enrichHistoryItem(
+            item,
+            connection,
+            storeProducts,
+            isItemPublished(item.id, item.afterUrl)
+          )
+        ),
+      })),
+    [batches, connection, storeProducts, publishTick]
+  );
+
+  const allItems = useMemo(
+    () => enrichedBatches.flatMap((b) => b.items ?? []),
+    [enrichedBatches]
+  );
+
+  const selectedItems = useMemo(
+    () => allItems.filter((i) => selectedIds.has(i.id)),
+    [allItems, selectedIds]
+  );
+
+  const toggleSelect = (itemId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  const selectBatchUnpublished = (items: HistoryBatchItem[]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const item of items) {
+        if (item.publishable && !item.published) next.add(item.id);
+      }
+      return next;
+    });
+  };
+
+  const clearBatchSelection = (items: HistoryBatchItem[]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const item of items) next.delete(item.id);
+      return next;
+    });
+  };
+
+  const handlePublishSelected = async () => {
+    if (!connection || selectedItems.length === 0) return;
+    setPublishing(true);
+    try {
+      const { ok, failed, publishedProductIds } = await publishHistoryItems(
+        selectedItems,
+        connection,
+        storeProducts
+      );
+      setPublishTick((t) => t + 1);
+      setSelectedIds(new Set());
+      if (publishedProductIds.size > 0) {
+        onPublishComplete?.(publishedProductIds);
+      }
+      const label = getConnectionPlatformLabel(connection);
+      if (ok > 0 && failed === 0) {
+        onToast?.(`${ok} תמונות פורסמו ל-${label} בהצלחה!`);
+      } else if (ok > 0) {
+        onToast?.(`${ok} פורסמו · ${failed} נכשלו`);
+      } else {
+        onToast?.(`כל הפרסומים נכשלו (${failed})`);
+      }
+    } finally {
+      setPublishing(false);
+    }
+  };
 
   const openItem = (item: HistoryBatchItem) => {
     if (!item.afterUrl && !item.beforeUrl) return;
@@ -2590,7 +2753,9 @@ export const HistoryScreen: React.FC<{
         <p className="text-2" style={{ marginTop: 16, fontSize: 14 }}>
           {batches.length === 0
             ? "עוד לא רצו עיצובים. כשתעצב מוצרים — ההיסטוריה תופיע כאן."
-            : `${batches.length} עיצובים · ${totalImages} תמונות. לחץ על תמונה להגדלה והשוואה.`}
+            : connection
+              ? `${batches.length} עיצובים · ${totalImages} תמונות. בחר תמונות שלא פורסמו ופרסם אותן לחנות.`
+              : `${batches.length} עיצובים · ${totalImages} תמונות. חבר חנות כדי לפרסם מההיסטוריה.`}
         </p>
       </section>
 
@@ -2648,7 +2813,15 @@ export const HistoryScreen: React.FC<{
 
             {month.items.map((b, i) => {
               const preset = PRESETS.find((p) => p.id === b.preset);
-              const batchItems = expandBatchItems(b);
+              const enriched = enrichedBatches.find((eb) => eb.id === b.id);
+              const batchItems = enriched?.items ?? [];
+
+              const unpublishedCount = batchItems.filter(
+                (item) => item.publishable && !item.published
+              ).length;
+              const batchSelectedCount = batchItems.filter((item) =>
+                selectedIds.has(item.id)
+              ).length;
 
               return (
                 <div
@@ -2774,14 +2947,33 @@ export const HistoryScreen: React.FC<{
                       />
                       {statusLabel(b)}
                     </span>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <button className="icon-btn" title="הורד" disabled>
-                        <II.Download size={14} />
-                      </button>
-                      <button className="icon-btn" title="שחזר" disabled>
-                        <II.History size={14} />
-                      </button>
-                    </div>
+                    {connection && unpublishedCount > 0 ? (
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          style={{ height: 34, fontSize: 12, padding: "0 12px" }}
+                          onClick={() => selectBatchUnpublished(batchItems)}
+                        >
+                          בחר הכל ({unpublishedCount})
+                        </button>
+                        {batchSelectedCount > 0 ? (
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            style={{
+                              height: 34,
+                              fontSize: 12,
+                              padding: "0 12px",
+                              color: "var(--ink-3)",
+                            }}
+                            onClick={() => clearBatchSelection(batchItems)}
+                          >
+                            בטל ({batchSelectedCount})
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   {batchItems.length > 0 && (
@@ -2797,38 +2989,109 @@ export const HistoryScreen: React.FC<{
                       {batchItems.map((item) => {
                         const thumb = item.afterUrl ?? item.beforeUrl;
                         const clickable = !!thumb;
+                        const isSelected = selectedIds.has(item.id);
+                        const canSelect = item.publishable && !item.published;
                         return (
-                          <button
+                          <div
                             key={item.id}
-                            type="button"
-                            disabled={!clickable}
-                            onClick={() => openItem(item)}
-                            title={
-                              item.error
-                                ? item.error
-                                : clickable
-                                  ? "לחץ להגדלה והשוואה"
-                                  : undefined
-                            }
                             style={{
-                              border: "1px solid var(--hair-2)",
+                              border: `1px solid ${
+                                isSelected
+                                  ? "rgba(176,64,224,.55)"
+                                  : "var(--hair-2)"
+                              }`,
                               borderRadius: 12,
                               overflow: "hidden",
                               background: "var(--bg-card)",
-                              padding: 0,
-                              textAlign: "start",
-                              cursor: clickable ? "pointer" : "default",
-                              opacity: item.status === "failed" ? 0.72 : 1,
+                              boxShadow: isSelected
+                                ? "0 0 0 2px rgba(176,64,224,.2)"
+                                : undefined,
+                              opacity:
+                                item.status === "failed"
+                                  ? 0.72
+                                  : item.published
+                                    ? 0.82
+                                    : 1,
                             }}
                           >
-                            <div
-                              style={{
-                                aspectRatio: "1 / 1",
-                                background: thumb
-                                  ? `url(${thumb}) center/cover`
-                                  : preset?.gradient,
-                              }}
-                            />
+                            <div style={{ position: "relative" }}>
+                              <button
+                                type="button"
+                                disabled={!clickable}
+                                onClick={() => openItem(item)}
+                                title={
+                                  item.error
+                                    ? item.error
+                                    : clickable
+                                      ? "לחץ להגדלה והשוואה"
+                                      : undefined
+                                }
+                                style={{
+                                  display: "block",
+                                  width: "100%",
+                                  padding: 0,
+                                  border: 0,
+                                  background: "transparent",
+                                  cursor: clickable ? "pointer" : "default",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    aspectRatio: "1 / 1",
+                                    background: thumb
+                                      ? `url(${thumb}) center/cover`
+                                      : preset?.gradient,
+                                  }}
+                                />
+                              </button>
+                              {item.published ? (
+                                <span
+                                  style={{
+                                    position: "absolute",
+                                    top: 8,
+                                    insetInlineStart: 8,
+                                    fontSize: 9,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.1em",
+                                    textTransform: "uppercase",
+                                    background: "rgba(37,211,150,.92)",
+                                    color: "#fff",
+                                    padding: "4px 7px",
+                                    borderRadius: 6,
+                                  }}
+                                >
+                                  פורסם
+                                </span>
+                              ) : canSelect ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleSelect(item.id)}
+                                  aria-pressed={isSelected}
+                                  style={{
+                                    position: "absolute",
+                                    top: 8,
+                                    insetInlineEnd: 8,
+                                    width: 26,
+                                    height: 26,
+                                    borderRadius: 7,
+                                    border: isSelected
+                                      ? "0"
+                                      : "2px solid rgba(255,255,255,.85)",
+                                    background: isSelected
+                                      ? "var(--grad)"
+                                      : "rgba(0,0,0,.35)",
+                                    display: "grid",
+                                    placeItems: "center",
+                                    cursor: "pointer",
+                                    boxShadow: "0 2px 8px rgba(0,0,0,.25)",
+                                  }}
+                                >
+                                  {isSelected ? (
+                                    <II.Check size={14} strokeWidth={3} />
+                                  ) : null}
+                                </button>
+                              ) : null}
+                            </div>
                             <div
                               style={{
                                 padding: "8px 10px",
@@ -2841,7 +3104,7 @@ export const HistoryScreen: React.FC<{
                             >
                               {item.productName}
                             </div>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -2851,6 +3114,61 @@ export const HistoryScreen: React.FC<{
             })}
           </section>
         ))
+      )}
+
+      {connection && selectedItems.length > 0 && (
+        <BulkBar>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+              width: "100%",
+              flexWrap: "wrap",
+            }}
+          >
+            <span style={{ fontSize: 14, fontWeight: 500 }}>
+              <span className="mono" style={{ fontWeight: 700 }}>
+                {selectedItems.length}
+              </span>{" "}
+              תמונות נבחרו לפרסום
+            </span>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={publishing}
+                onClick={() => setSelectedIds(new Set())}
+              >
+                בטל בחירה
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={publishing}
+                onClick={() => void handlePublishSelected()}
+                style={{ opacity: publishing ? 0.6 : 1 }}
+              >
+                {publishing ? (
+                  <>
+                    <Spinner size={15} /> מפרסם…
+                  </>
+                ) : (
+                  <>
+                    {connection.platform === "shopify" ? (
+                      <II.Shopify size={15} />
+                    ) : (
+                      <II.Globe size={15} />
+                    )}{" "}
+                    פרסם {selectedItems.length} ל-
+                    {getConnectionPlatformLabel(connection)}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </BulkBar>
       )}
 
       <ImageViewer
@@ -2869,7 +3187,7 @@ export const HistoryScreen: React.FC<{
 export const SettingsScreen: React.FC<{
   onLogout: () => void;
   userEmail?: string | null;
-  connection: ShopifyConnection | null;
+  connection: StoreConnection | null;
   onConnect: () => void;
   onDisconnect: () => void;
 }> = ({ onLogout, userEmail, connection, onConnect, onDisconnect }) => {
@@ -2987,14 +3305,14 @@ export const SettingsScreen: React.FC<{
 };
 
 const StoreTab: React.FC<{
-  connection: ShopifyConnection | null;
+  connection: StoreConnection | null;
   onConnect: () => void;
   onDisconnect: () => void;
 }> = ({ connection, onConnect, onDisconnect }) => (
   <>
     <div>
       <div className="eyebrow" style={{ marginBottom: 16 }}>
-        חיבור Shopify
+        חיבור חנות
       </div>
       {connection ? (
         <div
@@ -3024,11 +3342,19 @@ const StoreTab: React.FC<{
                 placeItems: "center",
               }}
             >
-              <II.Shopify size={40} />
+              {connection.platform === "shopify" ? (
+                <II.Shopify size={40} />
+              ) : (
+                <II.Globe size={36} />
+              )}
             </span>
             <div style={{ minWidth: 0, textAlign: "start" }}>
               <div style={{ fontWeight: 600, fontSize: 15 }}>
-                <span dir="ltr">{connection.shopName || connection.shop}</span>
+                <span dir="ltr">
+                  {connection.platform === "shopify"
+                    ? connection.shopName || connection.shop
+                    : connection.storeName || "Lovable / API"}
+                </span>
               </div>
               <div
                 style={{
@@ -3043,14 +3369,30 @@ const StoreTab: React.FC<{
                   marginTop: 4,
                 }}
               >
-                {connection.shopName ? (
+                <span>
+                  {connection.platform === "shopify" ? "Shopify" : "Lovable / API"}
+                </span>
+                {connection.platform === "shopify" && connection.shopName ? (
                   <>
-                    <span dir="ltr">{connection.shop}</span>
                     <span className="aster" aria-hidden="true">
                       ·
                     </span>
+                    <span dir="ltr">{connection.shop}</span>
                   </>
                 ) : null}
+                {connection.platform === "custom-api" ? (
+                  <>
+                    <span className="aster" aria-hidden="true">
+                      ·
+                    </span>
+                    <span dir="ltr" style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {connection.apiUrl}
+                    </span>
+                  </>
+                ) : null}
+                <span className="aster" aria-hidden="true">
+                  ·
+                </span>
                 <span>מחובר</span>
                 {connection.connectedAt ? (
                   <>
@@ -3164,7 +3506,9 @@ const BrandTab: React.FC = () => (
         {PRESETS.slice(0, 4).map((preset, i) => (
           <div
             key={preset.id}
-            className={`preset ${preset.id === "studio-white" ? "selected" : ""}`}
+            className={`preset ${preset.id === "studio-white" ? "selected" : ""}${
+              preset.comingSoon ? " coming-soon" : ""
+            }`}
           >
             <div
               className="preset-thumb"
