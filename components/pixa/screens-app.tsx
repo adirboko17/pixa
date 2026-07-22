@@ -307,19 +307,8 @@ export const DashboardScreen: React.FC<{
           }}
         />
 
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 28,
-          }}
-        >
-          <div className="eyebrow">01 · דשבורד · {fmtDate()}</div>
-          <div className="eyebrow-num">
-            גיליון N°{String(new Date().getDate()).padStart(2, "0")}.
-            {String(new Date().getMonth() + 1).padStart(2, "0")}
-          </div>
+        <div className="eyebrow" style={{ marginBottom: 28 }}>
+          01 · דשבורד · {fmtDate()}
         </div>
 
         <h1 className="h-hero" style={{ maxWidth: 980 }}>

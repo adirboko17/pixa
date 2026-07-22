@@ -125,7 +125,7 @@ function mapShopifyCollections(collections: ShopifyCollection[]): Category[] {
 }
 
 export default function PixaApp() {
-  const [stage, setStage] = useState<Stage>("register");
+  const [stage, setStage] = useState<Stage>("login");
   const [route, setRoute] = useState<AppRoute>("dashboard");
   const [connection, setConnection] = useState<StoreConnection | null>(null);
   const [session, setSession] = useState<Session | null>(null);
