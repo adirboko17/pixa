@@ -22,6 +22,7 @@ import type { StoreConnection } from "@/lib/store-connection";
 import { getConnectionPlatformLabel } from "@/lib/store-connection";
 import { type Quality, type ImageSize } from "@/lib/pricing";
 import { Spinner } from "./screens-shell";
+import { useOpenAIBalance } from "./use-openai-balance";
 import { StarLoader } from "./StarLoader";
 import { BulkBar } from "./BulkBar";
 import { isItemPublished } from "@/lib/publish-tracker";
@@ -3561,63 +3562,166 @@ const BrandTab: React.FC = () => (
   </>
 );
 
-const BillingTab: React.FC = () => (
-  <div
-    style={{
-      position: "relative",
-      padding: 32,
-      borderRadius: 16,
-      border: "1px solid var(--hair-2)",
-      overflow: "hidden",
-    }}
-  >
+const BillingTab: React.FC = () => {
+  const { data, loading, refresh } = useOpenAIBalance(true);
+  const [sessionInput, setSessionInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const saveSession = async () => {
+    setSaveMsg(null);
+    setSaving(true);
+    try {
+      const res = await fetch("/api/openai/billing-session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session: sessionInput.trim() }),
+      });
+      const json = (await res.json()) as { error?: string; ok?: boolean };
+      if (!res.ok) {
+        setSaveMsg(json.error || "שמירה נכשלה");
+        return;
+      }
+      setSessionInput("");
+      setSaveMsg("נשמר — מרענן יתרה…");
+      await refresh();
+    } catch {
+      setSaveMsg("שגיאת רשת");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+  <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
     <div
       style={{
-        position: "absolute",
-        top: -40,
-        insetInlineEnd: -40,
-        width: 200,
-        height: 200,
-        borderRadius: "50%",
-        background: "var(--grad)",
-        opacity: 0.15,
-        filter: "blur(40px)",
+        position: "relative",
+        padding: 32,
+        borderRadius: 16,
+        border: "1px solid var(--hair-2)",
+        overflow: "hidden",
       }}
-    />
-    <div className="eyebrow" style={{ marginBottom: 14 }}>
-      חבילה נוכחית
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: -40,
+          insetInlineEnd: -40,
+          width: 200,
+          height: 200,
+          borderRadius: "50%",
+          background: "var(--grad)",
+          opacity: 0.15,
+          filter: "blur(40px)",
+        }}
+      />
+      <div className="eyebrow" style={{ marginBottom: 14 }}>
+        יתרה OpenAI
+      </div>
+      <h2 className="h-display" style={{ marginBottom: 14 }}>
+        {loading ? (
+          "…"
+        ) : (
+          <span
+            className="grad-text"
+            style={{ color: data?.lowBalance ? "#ff8a71" : undefined }}
+          >
+            {data?.formatted ?? "—"}
+          </span>
+        )}
+      </h2>
+      <p className="text-2" style={{ fontSize: 14, marginBottom: 16 }}>
+        {data?.label ?? "יתרה OpenAI"}
+        {data?.message ? (
+          <>
+            {" "}
+            <span className="aster">·</span> {data.message}
+          </>
+        ) : null}
+      </p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <a
+          className="btn btn-primary"
+          href={
+            data?.billingUrl ??
+            "https://platform.openai.com/settings/organization/billing/overview"
+          }
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          פתח חיוב ב-OpenAI
+        </a>
+        <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
+          רענן
+        </button>
+      </div>
     </div>
-    <h2 className="h-display" style={{ marginBottom: 14 }}>
-      <span className="grad-text">Pro</span>{" "}
-      <span
-        className="text-2 mono"
-        style={{ fontSize: 18, fontStyle: "italic", fontWeight: 400 }}
+
+    <div
+      style={{
+        padding: 28,
+        borderRadius: 16,
+        border: "1px solid var(--hair-2)",
+      }}
+    >
+      <div className="eyebrow" style={{ marginBottom: 12 }}>
+        חיבור יתרה
+      </div>
+      <p className="text-2" style={{ fontSize: 13, lineHeight: 1.65, marginBottom: 16 }}>
+        OpenAI לא מאפשרים לקרוא יתרה עם API key רגיל. הדבק כאן{" "}
+        <strong>session key</strong> (מתחיל ב-{" "}
+        <span dir="ltr" className="mono">
+          sess-
+        </span>
+        ) מהדפדפן: פתח את{" "}
+        <a
+          href="https://platform.openai.com/settings/organization/billing/overview"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          דף החיוב
+        </a>
+        , DevTools → Network → רענן → בקשה{" "}
+        <span dir="ltr" className="mono">
+          credit_grants
+        </span>{" "}
+        → העתק את ה-Bearer מה-Authorization. המפתח נשמר בחשבון שלך ב-Supabase.
+      </p>
+      <input
+        className="input"
+        dir="ltr"
+        placeholder="sess-..."
+        value={sessionInput}
+        onChange={(e) => setSessionInput(e.target.value)}
+        style={{ marginBottom: 12, fontFamily: "var(--font-mono)" }}
+      />
+      {saveMsg ? (
+        <p style={{ fontSize: 12, color: "var(--ink-3)", marginBottom: 12 }}>{saveMsg}</p>
+      ) : null}
+      <button
+        type="button"
+        className="btn btn-primary"
+        disabled={saving || !sessionInput.trim()}
+        onClick={() => void saveSession()}
       >
-        · 149₪/ח׳
-      </span>
-    </h2>
-    <p className="text-2" style={{ fontSize: 14, marginBottom: 24 }}>
-      <span
-        className="serif mono"
-        style={{ fontSize: 18, color: "var(--ink)", marginInlineEnd: 6 }}
-      >
-        300
-      </span>{" "}
-      תמונות בחודש <span className="aster">·</span>{" "}
-      <span
-        className="serif mono"
-        style={{ fontSize: 18, color: "var(--ink)", margin: "0 6px" }}
-      >
-        42
-      </span>{" "}
-      קרדיטים נשארו <span className="aster">·</span> מתחדש 1.6
-    </p>
-    <div style={{ display: "flex", gap: 10 }}>
-      <button className="btn btn-primary">שדרג ל-Studio</button>
-      <button className="btn btn-ghost">נהל חבילה</button>
+        {saving ? "שומר…" : "שמור session key"}
+      </button>
+      <p className="text-2" style={{ fontSize: 12, marginTop: 16 }}>
+        אופציונלי בשרת:{" "}
+        <span dir="ltr" className="mono">
+          OPENAI_BILLING_SESSION_KEY
+        </span>{" "}
+        או{" "}
+        <span dir="ltr" className="mono">
+          OPENAI_ADMIN_API_KEY
+        </span>{" "}
+        (מציג רק הוצאה חודשית, לא יתרה).
+      </p>
     </div>
   </div>
-);
+  );
+};
 
 const TeamTab: React.FC = () => (
   <div>

@@ -14,8 +14,52 @@ import {
   type StorePlatform,
 } from "@/lib/store-connection";
 import { authErrorToHebrew, signInWithPassword } from "@/lib/supabase/auth";
+import type { OpenAIBillingSnapshot } from "@/lib/openai-balance";
+import { useOpenAIBalance } from "./use-openai-balance";
 
 const I = Icons;
+
+function OpenAIBalanceAmount({
+  data,
+  loading,
+  size = "md",
+}: {
+  data: OpenAIBillingSnapshot | null;
+  loading: boolean;
+  size?: "sm" | "md" | "lg";
+}) {
+  const fontSize = size === "lg" ? 38 : size === "sm" ? 15 : 18;
+  if (loading) {
+    return (
+      <span className="mono" style={{ fontSize, color: "var(--ink-3)" }}>
+        …
+      </span>
+    );
+  }
+  const display =
+    data?.formatted ??
+    (data?.kind === "unconfigured" ? "—" : data?.kind === "error" ? "!" : "—");
+  return (
+    <span
+      className={size === "lg" ? "serif" : "credits-num grad-text"}
+      style={{
+        fontSize,
+        fontWeight: size === "lg" ? 800 : 700,
+        lineHeight: 1,
+        letterSpacing: size === "lg" ? "-0.04em" : undefined,
+        fontVariantNumeric: "tabular-nums",
+        color: data?.lowBalance ? "#ff8a71" : undefined,
+      }}
+      title={data?.message}
+    >
+      {display}
+    </span>
+  );
+}
+
+function OpenAIBalanceLabel({ data }: { data: OpenAIBillingSnapshot | null }) {
+  return <span>{data?.label ?? "יתרה OpenAI"}</span>;
+}
 
 /* ============================================================
    SIDEBAR
@@ -30,7 +74,9 @@ export const Sidebar: React.FC<{
   productsCount?: number;
   productsLoading?: boolean;
   historyCount?: number;
-}> = ({ current, onNav, storeName, productsCount, productsLoading, historyCount }) => {
+  billing?: OpenAIBillingSnapshot | null;
+  billingLoading?: boolean;
+}> = ({ current, onNav, storeName, productsCount, productsLoading, historyCount, billing, billingLoading }) => {
   const items: Array<{
     id: NavId;
     label: string;
@@ -104,7 +150,7 @@ export const Sidebar: React.FC<{
             className="eyebrow-num"
             style={{ fontSize: 10, marginBottom: 6, color: "var(--cream)" }}
           >
-            קרדיטים
+            <OpenAIBalanceLabel data={billing ?? null} />
           </div>
           <div
             style={{
@@ -114,31 +160,32 @@ export const Sidebar: React.FC<{
               marginBottom: 4,
             }}
           >
-            <span
-              className="serif"
-              style={{
-                fontSize: 38,
-                fontWeight: 800,
-                lineHeight: 1,
-                letterSpacing: "-0.04em",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              42
-            </span>
-            <span style={{ fontSize: 11, color: "var(--ink-3)" }}>/ 300</span>
+            <OpenAIBalanceAmount
+              data={billing ?? null}
+              loading={!!billingLoading}
+              size="lg"
+            />
           </div>
           <div
             style={{ fontSize: 11, color: "var(--ink-3)", marginBottom: 12 }}
           >
-            חבילת Pro · מתחדש 1.6
+            {billing?.message ??
+              (billing?.kind === "balance"
+                ? "מתעדכן מ-OpenAI"
+                : "הגדר session key בחיוב")}
           </div>
-          <button
+          <a
             className="btn btn-ghost"
-            style={{ width: "100%", height: 32, fontSize: 12 }}
+            style={{ width: "100%", height: 32, fontSize: 12, textDecoration: "none" }}
+            href={
+              billing?.billingUrl ??
+              "https://platform.openai.com/settings/organization/billing/overview"
+            }
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            שדרג חבילה
-          </button>
+            טען יתרה ב-OpenAI
+          </a>
         </div>
       </div>
     </aside>
@@ -152,7 +199,9 @@ export const Sidebar: React.FC<{
 export const Topbar: React.FC<{
   onLogout: () => void;
   storeName?: string;
-}> = ({ onLogout }) => {
+  billing?: OpenAIBillingSnapshot | null;
+  billingLoading?: boolean;
+}> = ({ onLogout, billing, billingLoading }) => {
   return (
     <div className="topbar">
       <div className="search">
@@ -170,9 +219,13 @@ export const Topbar: React.FC<{
           gap: 18,
         }}
       >
-        <span className="credits">
-          <span className="credits-num grad-text">42</span>
-          <span>קרדיטים</span>
+        <span className="credits" title={billing?.message}>
+          <OpenAIBalanceAmount
+            data={billing ?? null}
+            loading={!!billingLoading}
+            size="sm"
+          />
+          <OpenAIBalanceLabel data={billing ?? null} />
         </span>
         <span
           style={{ width: 1, height: 18, background: "var(--hair-2)" }}
@@ -209,7 +262,9 @@ export const Layout: React.FC<{
   productsCount,
   productsLoading,
   historyCount,
-}) => (
+}) => {
+  const { data: billing, loading: billingLoading } = useOpenAIBalance(true);
+  return (
   <div className="shell-grid">
     <Sidebar
       current={current}
@@ -218,13 +273,21 @@ export const Layout: React.FC<{
       productsCount={productsCount}
       productsLoading={productsLoading}
       historyCount={historyCount}
+      billing={billing}
+      billingLoading={billingLoading}
     />
     <main style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <Topbar onLogout={onLogout} storeName={storeName} />
+      <Topbar
+        onLogout={onLogout}
+        storeName={storeName}
+        billing={billing}
+        billingLoading={billingLoading}
+      />
       <div className="content anim-up">{children}</div>
     </main>
   </div>
-);
+  );
+};
 
 /* ============================================================
    LOGIN — magazine cover style

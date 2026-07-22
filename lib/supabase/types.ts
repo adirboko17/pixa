@@ -223,6 +223,7 @@ export type Database = {
           created_at: string;
           email: string | null;
           id: string;
+          openai_billing_session: string | null;
           updated_at: string;
         };
         Insert: {
@@ -231,6 +232,7 @@ export type Database = {
           created_at?: string;
           email?: string | null;
           id: string;
+          openai_billing_session?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -239,6 +241,7 @@ export type Database = {
           created_at?: string;
           email?: string | null;
           id?: string;
+          openai_billing_session?: string | null;
           updated_at?: string;
         };
         Relationships: [];

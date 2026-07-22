@@ -185,26 +185,41 @@ export default function PixaApp() {
     const supabase = createClient();
     let mounted = true;
 
-    const applySession = (s: Session | null) => {
+    const applySignedIn = (s: Session) => {
       if (!mounted) return;
       setSession(s);
-      setUserEmail(s?.user?.email ?? null);
-      setAuthChecked(true);
-      if (s) {
-        // Store connection is loaded from Supabase in a dedicated effect.
-      } else {
-        setConnection(null);
-        setConnectionLoaded(false);
-        clearStoreConnection();
-        setHasBrandAvatar(null);
-        setStage((curr) => (curr === "register" ? "register" : "login"));
-      }
+      setUserEmail(s.user.email ?? null);
     };
 
-    supabase.auth.getSession().then(({ data }) => applySession(data.session));
+    const applySignedOut = () => {
+      if (!mounted) return;
+      setSession(null);
+      setUserEmail(null);
+      setConnection(null);
+      setConnectionLoaded(false);
+      clearStoreConnection();
+      setHasBrandAvatar(null);
+      setStage((curr) => (curr === "register" ? "register" : "login"));
+    };
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => {
-      applySession(s);
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      if (data.session) applySignedIn(data.session);
+      else applySignedOut();
+      setAuthChecked(true);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (!mounted) return;
+      if (event === "SIGNED_OUT") {
+        applySignedOut();
+        setAuthChecked(true);
+        return;
+      }
+      if (s) {
+        applySignedIn(s);
+        setAuthChecked(true);
+      }
     });
 
     return () => {
@@ -288,6 +303,19 @@ export default function PixaApp() {
       cancelled = true;
     };
   }, [session?.user?.id]);
+
+  /** Resolved screen while signed in (avoids login flash on refresh). */
+  const routeStage = useMemo((): Stage => {
+    if (!session) {
+      return stage === "register" ? "register" : "login";
+    }
+    if (hasBrandAvatar === null || !connectionLoaded) {
+      return "app";
+    }
+    if (!hasBrandAvatar) return "onboarding";
+    if (!connection) return "connect";
+    return "app";
+  }, [session, stage, hasBrandAvatar, connectionLoaded, connection]);
 
   /* ---------- Decide stage once we know auth + brand-avatar status ---------- */
   useEffect(() => {
@@ -764,7 +792,11 @@ export default function PixaApp() {
 
   /* ---------- Render ---------- */
 
-  if (!authChecked) {
+  const bootstrappingApp =
+    !!session?.user?.id &&
+    (hasBrandAvatar === null || !connectionLoaded);
+
+  if (!authChecked || bootstrappingApp) {
     return (
       <Frame>
         <div
@@ -790,13 +822,13 @@ export default function PixaApp() {
     );
   }
 
-  if (stage === "login")
+  if (routeStage === "login")
     return (
       <Frame>
         <LoginScreen onLogin={handleLogin} onRegister={goToRegister} />
       </Frame>
     );
-  if (stage === "register")
+  if (routeStage === "register")
     return (
       <Frame>
         <RegisterScreen
@@ -806,7 +838,7 @@ export default function PixaApp() {
         />
       </Frame>
     );
-  if (stage === "onboarding")
+  if (routeStage === "onboarding")
     return (
       <Frame>
         <RegisterScreen
@@ -818,7 +850,7 @@ export default function PixaApp() {
         />
       </Frame>
     );
-  if (stage === "connect")
+  if (routeStage === "connect")
     return (
       <Frame>
         <ConnectScreen
