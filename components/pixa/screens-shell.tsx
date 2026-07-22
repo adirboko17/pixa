@@ -737,7 +737,7 @@ export const ConnectScreen: React.FC<{
               }}
             >
               {platform === "shopify"
-                ? "הזן את כתובת החנות שלך ואת ה-Access Token של אפליקציית ה-Admin בתוך Shopify. הטוקן נשמר רק במכשיר שלך."
+                ? "הזן את כתובת החנות שלך ואת ה-Access Token של אפליקציית ה-Admin בתוך Shopify. החיבור נשמר בחשבון שלך ויטען בכל התחברות."
                 : "חבר אתר Lovable עם מוצרים ב-Supabase. הזן את כתובת ה-Edge Function ואת ה-API Key שיצרת בפרויקט."}
             </p>
 
@@ -1119,8 +1119,8 @@ export const ConnectScreen: React.FC<{
               />
               <PromiseLine
                 n="02"
-                t="הטוקן נשאר אצלך"
-                d="נשמר רק ב-localStorage של הדפדפן, לעולם לא בשרת שלנו"
+                t="חיבור לחשבון"
+                d="פרטי החיבור נשמרים בחשבון שלך ב-Supabase ונגישים רק לך"
               />
             </div>
           </div>

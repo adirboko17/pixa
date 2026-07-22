@@ -1,4 +1,5 @@
 // Unified store connection — supports Shopify and custom API (Lovable / Supabase).
+// Credentials are cached in localStorage for the active session and persisted per user in Supabase (RLS).
 
 import {
   clearConnection as clearShopifyConnection,

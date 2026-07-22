@@ -51,9 +51,14 @@ import {
   clearStoreConnection,
   getConnectionLabel,
   getConnectionPlatformLabel,
-  getStoreConnection,
+  saveStoreConnection,
   type StoreConnection,
 } from "@/lib/store-connection";
+import {
+  clearRemoteStoreConnection,
+  loadRemoteStoreConnection,
+  persistRemoteStoreConnection,
+} from "@/lib/store-connection-remote";
 import type { Quality } from "@/lib/pricing";
 import { loadBatchHistory, persistBatch, repairBatchHistoryNames } from "@/lib/batch-history";
 import { markItemPublished } from "@/lib/publish-tracker";
@@ -128,6 +133,7 @@ export default function PixaApp() {
   const [stage, setStage] = useState<Stage>("login");
   const [route, setRoute] = useState<AppRoute>("dashboard");
   const [connection, setConnection] = useState<StoreConnection | null>(null);
+  const [connectionLoaded, setConnectionLoaded] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -185,11 +191,11 @@ export default function PixaApp() {
       setUserEmail(s?.user?.email ?? null);
       setAuthChecked(true);
       if (s) {
-        const stored = getStoreConnection();
-        if (stored) setConnection(stored);
-        // Stage is decided by a separate effect once we know whether the
-        // user has completed the brand-avatar wizard.
+        // Store connection is loaded from Supabase in a dedicated effect.
       } else {
+        setConnection(null);
+        setConnectionLoaded(false);
+        clearStoreConnection();
         setHasBrandAvatar(null);
         setStage((curr) => (curr === "register" ? "register" : "login"));
       }
@@ -206,6 +212,41 @@ export default function PixaApp() {
       sub.subscription.unsubscribe();
     };
   }, []);
+
+  /* ---------- Load saved store connection from Supabase (per account) ---------- */
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setConnectionLoaded(false);
+      return;
+    }
+
+    let cancelled = false;
+    const supabase = createClient();
+    setConnectionLoaded(false);
+
+    void (async () => {
+      try {
+        const remote = await loadRemoteStoreConnection(supabase, session.user.id);
+        if (cancelled) return;
+        if (remote) {
+          saveStoreConnection(remote);
+          setConnection(remote);
+        } else {
+          clearStoreConnection();
+          setConnection(null);
+        }
+      } catch (e) {
+        console.warn("[pixa] failed to load store connection", e);
+        if (!cancelled) setConnection(null);
+      } finally {
+        if (!cancelled) setConnectionLoaded(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
 
   /* ---------- Load profile (business_name) once signed in ---------- */
   useEffect(() => {
@@ -251,7 +292,8 @@ export default function PixaApp() {
   /* ---------- Decide stage once we know auth + brand-avatar status ---------- */
   useEffect(() => {
     if (!session) return;
-    if (hasBrandAvatar === null) return; // still loading
+    if (hasBrandAvatar === null) return;
+    if (!connectionLoaded) return;
     setStage((curr) => {
       // Don't yank users out of the active app once they're in.
       if (curr === "app") return "app";
@@ -259,7 +301,7 @@ export default function PixaApp() {
       return connection ? "app" : "connect";
     });
     if (connection && hasBrandAvatar) setRoute("dashboard");
-  }, [session, hasBrandAvatar, connection]);
+  }, [session, hasBrandAvatar, connection, connectionLoaded]);
 
   /* ---------- Cleanup object URLs on unmount ---------- */
   useEffect(() => {
@@ -391,25 +433,21 @@ export default function PixaApp() {
   };
 
   const handleConnected = async (conn: StoreConnection) => {
+    saveStoreConnection(conn);
     setConnection(conn);
+    setConnectionLoaded(true);
     setStage("app");
     setRoute("dashboard");
     pushToast(`החנות "${getConnectionLabel(conn)}" חוברה בהצלחה!`);
 
-    if (session?.user?.id && conn.platform === "shopify") {
-      const supabase = createClient();
-      await supabase
-        .from("shopify_connections")
-        .upsert(
-          {
-            user_id: session.user.id,
-            shop: conn.shop,
-            shop_name: conn.shopName ?? null,
-            connected_at: new Date(conn.connectedAt).toISOString(),
-            last_synced_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,shop" }
-        );
+    if (session?.user?.id) {
+      try {
+        const supabase = createClient();
+        await persistRemoteStoreConnection(supabase, session.user.id, conn);
+      } catch (e) {
+        console.error("[pixa] failed to save store connection", e);
+        pushToast("החנות חוברה, אך השמירה בענן נכשלה — נסה שוב מההגדרות");
+      }
     }
   };
 
@@ -448,6 +486,9 @@ export default function PixaApp() {
     setShopifyCategories([]);
     setShopifyCatalogTotal(0);
     setShopifyError(null);
+    if (session?.user?.id) {
+      void clearRemoteStoreConnection(createClient(), session.user.id);
+    }
     pushToast("החנות נותקה");
   };
 

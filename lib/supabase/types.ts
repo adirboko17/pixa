@@ -245,6 +245,7 @@ export type Database = {
       };
       shopify_connections: {
         Row: {
+          access_token: string | null;
           connected_at: string;
           created_at: string;
           id: string;
@@ -255,6 +256,7 @@ export type Database = {
           user_id: string;
         };
         Insert: {
+          access_token?: string | null;
           connected_at?: string;
           created_at?: string;
           id?: string;
@@ -265,12 +267,46 @@ export type Database = {
           user_id: string;
         };
         Update: {
+          access_token?: string | null;
           connected_at?: string;
           created_at?: string;
           id?: string;
           last_synced_at?: string | null;
           shop?: string;
           shop_name?: string | null;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [];
+      };
+      custom_api_connections: {
+        Row: {
+          api_key: string;
+          api_url: string;
+          connected_at: string;
+          created_at: string;
+          id: string;
+          store_name: string | null;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          api_key: string;
+          api_url: string;
+          connected_at?: string;
+          created_at?: string;
+          id?: string;
+          store_name?: string | null;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          api_key?: string;
+          api_url?: string;
+          connected_at?: string;
+          created_at?: string;
+          id?: string;
+          store_name?: string | null;
           updated_at?: string;
           user_id?: string;
         };
