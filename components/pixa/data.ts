@@ -61,6 +61,8 @@ export type ProcessingOptions = {
   presetId: string;
   removeBackground: boolean;
   keepProportion: boolean;
+  /** Keep every identical unit in a pack/bundle photo (default true). */
+  preservePackUnits: boolean;
 };
 
 /** @deprecated Demo-only — not used in production screens. */

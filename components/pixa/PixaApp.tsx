@@ -156,6 +156,7 @@ export default function PixaApp() {
     presetId: "studio-white",
     removeBackground: true,
     keepProportion: true,
+    preservePackUnits: true,
   });
   const processingQuality: Quality = "low";
   const [processingProducts, setProcessingProducts] = useState<AnyProduct[]>(

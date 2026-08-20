@@ -1525,6 +1525,7 @@ export const PresetPickerModal: React.FC<{
   const [picked, setPicked] = useState<string>("studio-white");
   const [removeBackground, setRemoveBackground] = useState(true);
   const [keepProportion, setKeepProportion] = useState(true);
+  const [preservePackUnits, setPreservePackUnits] = useState(true);
 
   const pickedPreset = PRESETS.find((p) => p.id === picked);
   const canStart = pickedPreset?.available !== false;
@@ -1632,6 +1633,12 @@ export const PresetPickerModal: React.FC<{
                 on={keepProportion}
                 setOn={setKeepProportion}
               />
+              <ToggleRow
+                label="שמירת כל היחידות במארז"
+                hint="אם התמונה מציגה כמה יחידות זהות (מארז 2/3), שמור את כולן במקום לצמצם ליחידה אחת"
+                on={preservePackUnits}
+                setOn={setPreservePackUnits}
+              />
             </div>
           </div>
         </div>
@@ -1682,6 +1689,7 @@ export const PresetPickerModal: React.FC<{
                   presetId: picked,
                   removeBackground,
                   keepProportion,
+                  preservePackUnits,
                 })
               }
               style={{ opacity: canStart ? 1 : 0.5 }}
@@ -1830,7 +1838,8 @@ export const ProcessingOverlay: React.FC<{
     const size: ImageSize = "1024x1024";
 
     const runProcess = async (
-      file: File
+      file: File,
+      productName: string
     ): Promise<{ afterUrl: string; afterBase64: string } | null> => {
       const form = new FormData();
       form.append("image", file);
@@ -1838,6 +1847,7 @@ export const ProcessingOverlay: React.FC<{
       form.append("size", size);
       form.append("mode", "single");
       form.append("preset", presetId);
+      form.append("productName", productName);
       form.append(
         "removeBackground",
         processingOptions.removeBackground ? "1" : "0"
@@ -1845,6 +1855,10 @@ export const ProcessingOverlay: React.FC<{
       form.append(
         "keepProportion",
         processingOptions.keepProportion ? "1" : "0"
+      );
+      form.append(
+        "preservePackUnits",
+        processingOptions.preservePackUnits !== false ? "1" : "0"
       );
 
       const res = await fetch("/api/process", {
@@ -1882,7 +1896,7 @@ export const ProcessingOverlay: React.FC<{
         try {
           if (upload) {
             setPhase("process");
-            const processed = await runProcess(p.file);
+            const processed = await runProcess(p.file, p.name);
             if (processed) {
               afterBase64 = processed.afterBase64;
               afterUrl = processed.afterUrl;
@@ -1897,7 +1911,7 @@ export const ProcessingOverlay: React.FC<{
             const file = await urlToFile(p.imageUrl, `${safeName}.jpg`);
             if (cancelled) return;
             setPhase("process");
-            const processed = await runProcess(file);
+            const processed = await runProcess(file, p.name);
             if (processed) {
               afterBase64 = processed.afterBase64;
               afterUrl = processed.afterUrl;

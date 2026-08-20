@@ -25,10 +25,11 @@ LIGHT-COLORED / WHITE PRODUCT VISIBILITY (CRITICAL — must be applied for every
 
 const BACKGROUND_REMOVAL_BLOCK = `
 BACKGROUND REMOVAL (CRITICAL — must follow):
-- Completely remove the original background, environment, floor, wall, scenery, props, hands, people, packaging clutter, watermarks, and any non-product elements.
+- Completely remove the original background, environment, floor, wall, scenery, props, hands, people, watermarks, and any NON-PRODUCT elements.
 - Isolate the product cleanly with sharp, natural edges — no halos, no leftover background fragments, no colored fringes around the silhouette.
 - Place the fully isolated product on a pure white #FFFFFF professional studio background.
-- Center and arrange the product beautifully with balanced composition and a soft contact shadow underneath.`;
+- Center and arrange the product beautifully with balanced composition and a soft contact shadow underneath.
+- IMPORTANT: extra copies of the SAME product (a 2-pack, 3-pack, bundle, מארז) are part of the product. Do NOT treat them as "packaging clutter" or "other products" to delete.`;
 
 const KEEP_PROPORTION_BLOCK = `
 PROPORTION PRESERVATION (CRITICAL — must follow):
@@ -51,25 +52,38 @@ COMPOSITION & PRESENTATION (must follow — applies to EVERY image):
   • Boxes, packaging → slight 3/4 angle to show the main face plus a hint of the side.
   • Bins, baskets, containers → upright, front-facing, lid closed (unless the source shows it open).
   • Tools and appliances → in their natural usage orientation, fully visible.
+  • Multi-pack of identical units → ALL units upright, labels facing camera, arranged as a tight retail pack shot (usually a neat row or slight triangular grouping). Never reduce the pack to a single unit.
 - The product must look STABLE, sitting naturally on an invisible flat surface. Vertical things stand vertical. Do not tilt, lean, or float at weird angles unless the source clearly shows that.
 - NO decorative artifacts whatsoever: no splashes, splatters, sparkles, paint drips, smoke, mist, motion lines, glitter, abstract shapes, color gradients, halos, lens flares, vignettes, or stylized graphic elements anywhere in the image.
-- NO additional props, hands, people, body parts, plants, furniture, floors, walls, gradients, or contextual scenery. Just the product, a soft contact shadow under it, and pure white.
+- NO additional props, hands, people, body parts, plants, furniture, floors, walls, gradients, or contextual scenery. Just the product (every unit of it), a soft contact shadow under it, and pure white.
 - The composition must look like a real photograph taken in a professional product photography studio, NOT like a digital illustration, render, or AI artwork.`;
 
-const SINGLE_PROMPT = `Place this exact product on a perfectly clean, ABSOLUTELY PURE WHITE background.
+const UNIT_COUNT_BLOCK = `
+UNIT COUNT / PACK / BUNDLE PRESERVATION (ABSOLUTELY CRITICAL — do this FIRST):
+- Count every physical unit that is part of the sellable product in the source image.
+- The result MUST contain the EXACT SAME NUMBER of physical units. If the source shows 3 jars, output 3 jars. If it shows 1 bottle, output 1 bottle. If it shows 2 boxes, output 2 boxes.
+- Identical copies still count separately. A 2-pack, 3-pack, bundle, kit, set, or מארז of the SAME item is N physical items sold together — NOT "one SKU photographed once".
+- NEVER collapse, merge, deduplicate, or "simplify" multiple identical units into a single hero unit. This is the most common failure — do not do it.
+- Do NOT invent extra units that are not in the source.
+- When the product is a multi-pack of identical items, photograph ALL of them together as a professional e-commerce pack shot: every unit fully visible, typically standing side-by-side (or a tight retail grouping), labels facing the camera, unified lighting, on pure white.
+- "Other products" / clutter to remove means unrelated background objects (furniture, rooms, people, random extras). Extra copies of THIS same product that form the pack are THE PRODUCT — keep them.`;
+
+const SINGLE_PROMPT = `Place the exact product shown in this photo on a perfectly clean, ABSOLUTELY PURE WHITE background.
 The background color MUST be #FFFFFF (255, 255, 255) — pure white, NOT off-white, NOT cream, NOT light gray, NOT beige, NOT any tint whatsoever. Think of a brand new sheet of bright white paper under perfect studio lighting.
 Keep the product itself 100% identical: do not change its shape, colors, materials, text, logos, labels, proportions, or any small detail.
+If the photo shows more than one physical unit (including identical copies sold as a pack / bundle / מארז), keep EVERY unit — do not reduce it to a single item.
 
 PRODUCT IDENTIFICATION (do this FIRST, before generating):
-- Identify the FULL product silhouette in the source image — every contour, edge, ridge, handle, cap, lid, base, foot, label, opening, button, and accessory.
-- Recreate the ENTIRE product, complete from top to bottom, side to side. No missing edges. No fading. No partial silhouette. No "cut-off" sections.
-- If the source image contains other elements (background, props, hands, people, floor, walls, shadows, other products) that overlap or partially hide the product, mentally "complete" the hidden parts so the product appears whole and intact in the result.
+- Count the physical units of the product, then identify the FULL silhouette of each one — every contour, edge, ridge, handle, cap, lid, base, foot, label, opening, button, and accessory.
+- Recreate the ENTIRE product, complete from top to bottom, side to side, including every unit. No missing edges. No fading. No partial silhouette. No "cut-off" sections.
+- If the source image contains other elements (background, props, hands, people, floor, walls, shadows, unrelated objects) that overlap or partially hide the product, mentally "complete" the hidden parts so every unit appears whole and intact in the result.
+${UNIT_COUNT_BLOCK}
 
 IMPORTANT SIZING RULES (must follow strictly):
-- The product must occupy ONLY about 60-65% of the frame height/width (whichever is larger).
+- The product (or the full pack / all units together, if it is a multi-pack) must occupy ONLY about 60-65% of the frame height/width (whichever is larger).
 - Leave generous empty PURE WHITE margins on ALL four sides: roughly 18-22% pure white space on top, bottom, left, and right.
 - Do NOT let the product touch or come close to any edge of the image. It must feel "floating" with lots of breathing room around it.
-- Center the product perfectly in the middle of the frame.
+- Center the product (the full arrangement of every unit) perfectly in the middle of the frame.
 - This is critical so the image fits nicely inside small product cards on an e-commerce website without looking cramped or getting cropped.
 
 BACKGROUND RULES (critical):
@@ -81,7 +95,7 @@ ${TEXT_FIDELITY_BLOCK}
 
 Use bright, soft, even professional studio lighting (like a high-end e-commerce / Amazon / Shopify product photo) with subtle directional wrap-around shading that makes the product look 3D and physical, NOT flat.
 Add a very subtle natural soft contact shadow directly underneath the product to ground it on the surface (the shadow should be soft, short, and stay close to the product base only).
-Remove any existing background, props, hands, packaging clutter, watermarks, decorations, or distractions — but PRESERVE the full product itself, completely intact.
+Remove any existing background, props, hands, watermarks, decorations, or distractions — but PRESERVE the full product itself, every unit, completely intact.
 Output must be a photorealistic 1:1 square product photo, sharp, high resolution, retail-ready, with the entire product clearly visible (no missing parts, no fading edges), clearly smaller than the frame, and lots of clean PURE WHITE space around it.`;
 
 const GROUP_PROMPT = `Take ALL the products visible in this image and arrange them TOGETHER in ONE professional, cohesive, editorial-style product photo — like a premium retail "set" / "bundle" / "kit" hero photograph (think Williams Sonoma, Amazon bundle hero shot, IKEA collection photo, premium Shopify collection card).
@@ -113,6 +127,8 @@ PRODUCT FIDELITY (must follow):
 - Do NOT invent new products. Do NOT remove products that exist in the source image.
 - Do NOT change product designs, colors, or logos.
 - Render the COMPLETE silhouette of every product — no fading edges, no missing parts, no cut-off areas, no "ghosting" against the white background.
+- Identical items still count separately. If the source shows three of the same jar/bottle/box, the result MUST show three. Never collapse a pack/bundle/מארז into one unit.
+${UNIT_COUNT_BLOCK}
 ${LIGHT_PRODUCT_BLOCK}
 ${COMPOSITION_BLOCK}
 ${TEXT_FIDELITY_BLOCK}
@@ -144,8 +160,10 @@ OUTPUT REQUIREMENTS:
 - Inside the masked area: apply the user's correction, drawing details from IMAGE 2 when relevant (e.g., reproducing label text accurately, restoring missing product edges, etc.).
 - Background remains 100% pure white #FFFFFF wherever it is white in IMAGE 1.
 - Photorealistic, sharp, retail-ready, 1:1 square product photo.
+- Preserve the exact number of physical product units from the original source. Do not collapse a pack into one unit unless the user explicitly asked to.
 ${LIGHT_PRODUCT_BLOCK}
-${TEXT_FIDELITY_BLOCK}`;
+${TEXT_FIDELITY_BLOCK}
+${UNIT_COUNT_BLOCK}`;
   }
 
   return `You are refining an EXISTING AI-generated product photo to fix specific issues that the user pointed out. You are receiving TWO reference images:
@@ -164,9 +182,11 @@ OUTPUT REQUIREMENTS (still mandatory):
 - Product fidelity: keep true shape, colors, materials, proportions, and ALL labels/text exactly as in IMAGE 1.
 - If the product is white/light-colored, never let it fade into the background — use subtle natural shading to keep it 3D and clearly visible.
 - Photorealistic, sharp, high resolution, 1:1 square product photo, retail-ready.
+- Preserve the exact number of physical product units from IMAGE 1. Do not collapse a pack into one unit unless the user explicitly asked to.
 ${LIGHT_PRODUCT_BLOCK}
 ${COMPOSITION_BLOCK}
-${TEXT_FIDELITY_BLOCK}`;
+${TEXT_FIDELITY_BLOCK}
+${UNIT_COUNT_BLOCK}`;
 }
 
 /**
@@ -334,6 +354,33 @@ function pickMime(name: string, fallback = "image/png") {
   return fallback;
 }
 
+/** Detect pack/bundle titles so the model is told the unit count explicitly. */
+function looksLikePackTitle(name: string): boolean {
+  const n = name.toLowerCase();
+  return (
+    /מארז|חבילה|שלישייה|רביעייה|multipack|multi-pack|bundle/.test(n) ||
+    /\b(pack|set)\b/.test(n) ||
+    /\b\d+\s*(יחידות|יח['׳.]?|units?|pcs|pc|pack|pk)\b/.test(n) ||
+    /\b(x|×)\s*\d+\b/.test(n) ||
+    /\b\d+\s*(x|×)\b/.test(n) ||
+    /\b\d+\s*[-–]\s*pack\b/.test(n)
+  );
+}
+
+function productNameHint(name: string): string {
+  const trimmed = name.trim().slice(0, 180);
+  if (!trimmed) return "";
+  const pack = looksLikePackTitle(trimmed);
+  return `
+PRODUCT TITLE (from the store listing — a hint only, NEVER render this text in the image):
+"${trimmed}"
+${
+  pack
+    ? `This title indicates a PACK / BUNDLE / מארז. The output MUST show every physical unit of the pack (e.g. a 3-pack = three identical items), not a single unit.`
+    : `If the source photo shows several identical units together, keep all of them even if the title does not mention a pack.`
+}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -365,6 +412,9 @@ export async function POST(req: NextRequest) {
       (form.get("removeBackground") as string | null) !== "0";
     const keepProportion =
       (form.get("keepProportion") as string | null) !== "0";
+    const preservePackUnits =
+      (form.get("preservePackUnits") as string | null) !== "0";
+    const productName = (form.get("productName") as string | null)?.trim() || "";
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -423,6 +473,17 @@ export async function POST(req: NextRequest) {
         } else {
           prompt += `\n\nADDITIONAL STRICT SIZING OVERRIDE: The product must occupy NO MORE than ${productPercent}% of the frame. Leave at least ${padding}% pure white empty space margin on EVERY side (top, bottom, left, right). The product must look small and floating with lots of clean white space around it.`;
         }
+      }
+
+      if (productName) {
+        prompt += `\n\n${productNameHint(productName)}`;
+      }
+
+      if (!preservePackUnits) {
+        prompt += `\n\nSINGLE-UNIT OVERRIDE: The user wants a single-unit hero photo. Photograph only ONE primary unit of the product, even if the source shows a pack of several identical items.`;
+      } else {
+        // Repeat at the end — image models often drop unit-count from the middle of a long prompt.
+        prompt += `\n\n${UNIT_COUNT_BLOCK}`;
       }
     }
 
