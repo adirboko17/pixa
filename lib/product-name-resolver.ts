@@ -26,9 +26,18 @@ export function saveAfterProductMap(
   shopifyProductId?: number
 ) {
   if (typeof window === "undefined" || !afterUrl) return;
+  if (afterUrl.startsWith("data:") || afterUrl.startsWith("blob:")) return;
   const map = readAfterMap();
   map[afterUrl] = { name, shopifyProductId };
-  localStorage.setItem(AFTER_MAP_KEY, JSON.stringify(map));
+  try {
+    localStorage.setItem(AFTER_MAP_KEY, JSON.stringify(map));
+  } catch {
+    try {
+      localStorage.removeItem(AFTER_MAP_KEY);
+    } catch {
+      /* ignore quota */
+    }
+  }
 }
 
 export function lookupAfterProductMap(afterUrl?: string): AfterMapEntry | null {

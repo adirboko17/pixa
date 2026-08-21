@@ -1,6 +1,8 @@
-// Client-side metadata for batch items (product ids for publish from history).
+// Small ids only — never persist blueprint layouts or images here.
+// Layouts live in React state + batch_items.blueprint_layout.
 
 const META_KEY = "photospro:batch-item-meta";
+const MAX_ENTRIES = 80;
 
 export type BatchItemSourceType = "shopify" | "custom-api" | "upload";
 
@@ -12,16 +14,15 @@ export type BatchItemMeta = {
   blueprintLayout?: unknown;
 };
 
-export function patchBatchItemMeta(
-  itemId: string,
-  patch: Partial<BatchItemMeta>
-): void {
-  const prev = getBatchItemMeta(itemId);
-  saveBatchItemMeta(itemId, {
-    sourceType: prev?.sourceType ?? "upload",
-    ...prev,
-    ...patch,
-  });
+const memoryLayouts = new Map<string, unknown>();
+
+function stripLayout(meta: BatchItemMeta): BatchItemMeta {
+  return {
+    sourceType: meta.sourceType,
+    shopifyProductId: meta.shopifyProductId,
+    externalProductId: meta.externalProductId,
+    productId: meta.productId,
+  };
 }
 
 function readMetaMap(): Record<string, BatchItemMeta> {
@@ -36,13 +37,78 @@ function readMetaMap(): Record<string, BatchItemMeta> {
   }
 }
 
+function writeMetaMap(map: Record<string, BatchItemMeta>): void {
+  if (typeof window === "undefined") return;
+  const slim: Record<string, BatchItemMeta> = {};
+  const ids = Object.keys(map);
+  const keep = ids.length > MAX_ENTRIES ? ids.slice(-MAX_ENTRIES) : ids;
+  for (const id of keep) {
+    slim[id] = stripLayout(map[id]);
+  }
+  try {
+    localStorage.setItem(META_KEY, JSON.stringify(slim));
+  } catch {
+    try {
+      const fewer = keep.slice(-40);
+      const retry: Record<string, BatchItemMeta> = {};
+      for (const id of fewer) retry[id] = slim[id] ?? stripLayout(map[id]);
+      localStorage.setItem(META_KEY, JSON.stringify(retry));
+    } catch {
+      try {
+        localStorage.removeItem(META_KEY);
+      } catch {
+        /* quota already blown — never throw into the UI */
+      }
+    }
+  }
+}
+
+function compactStoredMetaOnce(): void {
+  if (typeof window === "undefined") return;
+  const map = readMetaMap();
+  const bloated = Object.values(map).some((m) => m?.blueprintLayout != null);
+  if (bloated || Object.keys(map).length > MAX_ENTRIES) {
+    writeMetaMap(map);
+  }
+}
+
+if (typeof window !== "undefined") {
+  compactStoredMetaOnce();
+}
+
+export function patchBatchItemMeta(
+  itemId: string,
+  patch: Partial<BatchItemMeta>
+): void {
+  const prev = getBatchItemMeta(itemId);
+  saveBatchItemMeta(itemId, {
+    sourceType: prev?.sourceType ?? "upload",
+    ...prev,
+    ...patch,
+  });
+}
+
 export function saveBatchItemMeta(itemId: string, meta: BatchItemMeta): void {
   if (typeof window === "undefined" || !itemId) return;
+  if (meta.blueprintLayout !== undefined) {
+    memoryLayouts.set(itemId, meta.blueprintLayout);
+  }
   const map = readMetaMap();
-  map[itemId] = meta;
-  localStorage.setItem(META_KEY, JSON.stringify(map));
+  map[itemId] = stripLayout({
+    sourceType: meta.sourceType,
+    ...map[itemId],
+    ...meta,
+  });
+  writeMetaMap(map);
 }
 
 export function getBatchItemMeta(itemId: string): BatchItemMeta | null {
-  return readMetaMap()[itemId] ?? null;
+  const stored = readMetaMap()[itemId];
+  const layout = memoryLayouts.get(itemId) ?? stored?.blueprintLayout;
+  if (!stored && layout === undefined) return null;
+  return {
+    sourceType: stored?.sourceType ?? "upload",
+    ...stored,
+    ...(layout !== undefined ? { blueprintLayout: layout } : {}),
+  };
 }

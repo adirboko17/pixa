@@ -662,9 +662,10 @@ export const Spinner: React.FC<{ size?: number }> = ({ size = 16 }) => (
       display: "inline-block",
       width: size,
       height: size,
-      border: "2px solid rgba(255,255,255,.3)",
-      borderTopColor: "white",
+      border: "2px solid currentColor",
+      borderTopColor: "transparent",
       borderRadius: "50%",
+      opacity: 0.85,
       animation: "spin .8s linear infinite",
     }}
   />

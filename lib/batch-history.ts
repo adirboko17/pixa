@@ -422,6 +422,54 @@ export async function repairBatchHistoryNames(
 
 const layoutPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+export async function persistBlueprintAfterImage(
+  itemId: string,
+  imageUrl: string
+): Promise<string | null> {
+  if (!itemId || !isPersistedItemId(itemId) || !imageUrl.startsWith("data:")) {
+    return imageUrl.startsWith("http") ? imageUrl : null;
+  }
+  const base64 = imageUrl.split(",")[1];
+  if (!base64) return null;
+
+  const supabase = createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: row, error: rowError } = await supabase
+    .from("batch_items")
+    .select("batch_id")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (rowError || !row?.batch_id) {
+    console.error("[history] failed to load batch item for drawing", rowError);
+    return null;
+  }
+
+  try {
+    const url = await uploadBase64Png(
+      user.id,
+      row.batch_id,
+      `${itemId}-after.png`,
+      base64
+    );
+    const { error } = await supabase
+      .from("batch_items")
+      .update({ after_url: url })
+      .eq("id", itemId);
+    if (error) {
+      console.error("[history] failed to save cropped drawing", error);
+      return null;
+    }
+    return url;
+  } catch (err) {
+    console.error("[history] failed to upload cropped drawing", err);
+    return null;
+  }
+}
+
 export async function persistBlueprintLayout(
   itemId: string,
   layout: BlueprintLayout

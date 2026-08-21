@@ -70,6 +70,7 @@ import type { Quality } from "@/lib/pricing";
 import {
   loadBatchHistory,
   persistBatch,
+  persistBlueprintAfterImage,
   persistBlueprintLayout,
   repairBatchHistoryNames,
 } from "@/lib/batch-history";
@@ -672,7 +673,14 @@ export default function PixaApp() {
   };
 
   const applyBlueprintLayout = useCallback(
-    (match: { productId?: number; itemId?: string }, layout: BlueprintLayout) => {
+    (
+      match: { productId?: number; itemId?: string },
+      layout: BlueprintLayout,
+      imageUrl?: string
+    ) => {
+      const afterBase64 = imageUrl?.startsWith("data:")
+        ? imageUrl.split(",")[1]
+        : undefined;
       const productId =
         match.productId ??
         batchHistory
@@ -681,7 +689,15 @@ export default function PixaApp() {
       if (productId != null) {
         setResults((prev) =>
           prev.map((r) =>
-            r.productId === productId ? { ...r, blueprintLayout: layout } : r
+            r.productId === productId
+              ? {
+                  ...r,
+                  blueprintLayout: layout,
+                  ...(imageUrl
+                    ? { afterUrl: imageUrl, afterBase64: afterBase64 ?? r.afterBase64 }
+                    : {}),
+                }
+              : r
           )
         );
       }
@@ -692,7 +708,13 @@ export default function PixaApp() {
             const hit =
               (match.itemId && item.id === match.itemId) ||
               (match.productId != null && item.productId === match.productId);
-            return hit ? { ...item, blueprintLayout: layout } : item;
+            return hit
+              ? {
+                  ...item,
+                  blueprintLayout: layout,
+                  ...(imageUrl ? { afterUrl: imageUrl } : {}),
+                }
+              : item;
           }),
         }))
       );
@@ -708,6 +730,26 @@ export default function PixaApp() {
       }
       for (const id of ids) {
         void persistBlueprintLayout(id, layout);
+        if (imageUrl) {
+          void persistBlueprintAfterImage(id, imageUrl).then((stored) => {
+            if (!stored || stored === imageUrl) return;
+            setBatchHistory((prev) =>
+              prev.map((batch) => ({
+                ...batch,
+                items: batch.items?.map((item) =>
+                  item.id === id ? { ...item, afterUrl: stored } : item
+                ),
+              }))
+            );
+            if (productId != null) {
+              setResults((prev) =>
+                prev.map((r) =>
+                  r.productId === productId ? { ...r, afterUrl: stored } : r
+                )
+              );
+            }
+          });
+        }
       }
     },
     [batchHistory]
@@ -1088,8 +1130,8 @@ export default function PixaApp() {
             connection={connection}
             storeProducts={shopifyProducts}
             onToast={pushToast}
-            onBlueprintLayoutSave={(itemId, layout) =>
-              applyBlueprintLayout({ itemId }, layout)
+            onBlueprintLayoutSave={(itemId, layout, imageUrl) =>
+              applyBlueprintLayout({ itemId }, layout, imageUrl)
             }
             onPublishComplete={(publishedProductIds) => {
               if (publishedProductIds.size > 0) {
@@ -1135,8 +1177,8 @@ export default function PixaApp() {
                   }
                 : publishResults
             }
-            onLayoutChange={(productId, layout) =>
-              applyBlueprintLayout({ productId }, layout)
+            onLayoutChange={(productId, layout, imageUrl) =>
+              applyBlueprintLayout({ productId }, layout, imageUrl)
             }
             onToast={pushToast}
             onBack={() => setRoute(resultsBack)}

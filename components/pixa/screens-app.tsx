@@ -29,6 +29,7 @@ import {
   getConnectionPlatformLabel,
 } from "@/lib/store-connection";
 import { uploadFlattenedDrawing } from "@/lib/upload-blueprint-drawing";
+import { stableProductId } from "@/lib/custom-api-client";
 import { getBatchItemMeta } from "@/lib/batch-item-meta";
 import { type Quality, type ImageSize } from "@/lib/pricing";
 import { Spinner } from "./screens-shell";
@@ -2387,7 +2388,11 @@ export const ResultsScreen: React.FC<{
   onPublish: (approvedIds: number[]) => void | Promise<void>;
   onBack: () => void;
   mode?: "studio" | "blueprint";
-  onLayoutChange?: (productId: number, layout: BlueprintLayout) => void;
+  onLayoutChange?: (
+    productId: number,
+    layout: BlueprintLayout,
+    imageUrl?: string
+  ) => void;
   onToast?: (msg: string) => void;
 }> = ({
   results,
@@ -2800,6 +2805,7 @@ export const ResultsScreen: React.FC<{
                   </div>
                 )}
               </div>
+              <div>
               <div className="product-info">
                 <div className="product-name">{r.name}</div>
                 <div style={{ display: "flex", gap: 4 }}>
@@ -2876,6 +2882,38 @@ export const ResultsScreen: React.FC<{
                   </button>
                 </div>
               </div>
+                {canUploadDrawing(r) && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={uploadingIds.has(r.productId)}
+                    onClick={() => void uploadDrawing(r)}
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      marginTop: 10,
+                      fontSize: 12,
+                      color: uploadedIds.has(r.productId)
+                        ? "var(--ok)"
+                        : undefined,
+                    }}
+                  >
+                    {uploadingIds.has(r.productId) ? (
+                      <>
+                        <Spinner size={14} /> מעלה שרטוט…
+                      </>
+                    ) : uploadedIds.has(r.productId) ? (
+                      <>
+                        <II.Check size={14} /> הועלה לאתר
+                      </>
+                    ) : (
+                      <>
+                        <II.Upload size={14} /> העלה שרטוט לאתר
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           );
         })}
@@ -2932,7 +2970,15 @@ export const ResultsScreen: React.FC<{
                 if (ok > 0) onToast?.(`${ok} שרטוטים הועלו לאתר`);
               }}
             >
-              <II.Upload size={15} /> העלה שרטוט לאתר
+              {uploadingIds.size > 0 ? (
+                <>
+                  <Spinner size={15} /> מעלה שרטוט…
+                </>
+              ) : (
+                <>
+                  <II.Upload size={15} /> העלה שרטוט לאתר
+                </>
+              )}
             </button>
           )}
         <button
@@ -3003,9 +3049,18 @@ export const ResultsScreen: React.FC<{
             results.find((r) => r.productId === editingId)?.name ?? ""
           }
           onClose={() => setEditingId(null)}
-          onSave={(next) => {
+          onSave={(next, imageUrl) => {
             setLayouts((prev) => ({ ...prev, [editingId]: next }));
-            onLayoutChange?.(editingId, next);
+            onLayoutChange?.(editingId, next, imageUrl);
+          }}
+          canUpload={results.some(
+            (r) => r.productId === editingId && canUploadDrawing(r)
+          )}
+          uploading={uploadingIds.has(editingId)}
+          uploaded={uploadedIds.has(editingId)}
+          onUpload={async () => {
+            const row = results.find((r) => r.productId === editingId);
+            if (row) await uploadDrawing(row);
           }}
         />
       )}
@@ -3063,7 +3118,11 @@ export const HistoryScreen: React.FC<{
   storeProducts?: StoreBackedProduct[];
   onPublishComplete?: (publishedProductIds: Map<number, string>) => void;
   onToast?: (msg: string) => void;
-  onBlueprintLayoutSave?: (itemId: string, layout: BlueprintLayout) => void;
+  onBlueprintLayoutSave?: (
+    itemId: string,
+    layout: BlueprintLayout,
+    imageUrl?: string
+  ) => void;
 }> = ({
   batches,
   connection = null,
@@ -3091,13 +3150,24 @@ export const HistoryScreen: React.FC<{
     if (item.externalProductId) return item.externalProductId;
     const meta = getBatchItemMeta(item.id);
     if (meta?.externalProductId) return meta.externalProductId;
+    const catalog = storeProducts.filter(isCustomApiProduct);
+    if (item.productId != null) {
+      const byId = catalog.find(
+        (p) => stableProductId(p.externalId) === item.productId || p.id === item.productId
+      );
+      if (byId) return byId.externalId;
+    }
     if (item.beforeUrl) {
       const normalized = item.beforeUrl.split("?")[0];
-      const matched = storeProducts.find(
-        (p) =>
-          isCustomApiProduct(p) && p.imageUrl.split("?")[0] === normalized
+      const matched = catalog.find(
+        (p) => p.imageUrl.split("?")[0] === normalized
       );
-      if (matched && isCustomApiProduct(matched)) return matched.externalId;
+      if (matched) return matched.externalId;
+    }
+    const name = item.productName.trim().toLowerCase();
+    if (name) {
+      const byName = catalog.filter((p) => p.name.trim().toLowerCase() === name);
+      if (byName.length === 1) return byName[0].externalId;
     }
     return undefined;
   };
@@ -3106,8 +3176,7 @@ export const HistoryScreen: React.FC<{
     !!customApiConn &&
     batch.preset === "blueprint" &&
     item.status === "success" &&
-    !!item.afterUrl &&
-    !!resolveDrawingProductId(item);
+    !!item.afterUrl;
 
   const uploadHistoryDrawing = async (item: HistoryBatchItem) => {
     if (!customApiConn || !item.afterUrl) return;
@@ -3681,6 +3750,21 @@ export const HistoryScreen: React.FC<{
                               >
                                 {item.productName}
                               </div>
+                              {canEditBlueprint(b, item) ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost"
+                                  onClick={() => setEditingId(item.id)}
+                                  style={{
+                                    width: "100%",
+                                    height: 32,
+                                    marginTop: 8,
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  <II.Ruler size={12} /> ערוך מידות
+                                </button>
+                              ) : null}
                               {canUploadHistoryDrawing(b, item) ? (
                                 <button
                                   type="button"
@@ -3791,7 +3875,13 @@ export const HistoryScreen: React.FC<{
           layout={editingItem.blueprintLayout}
           productName={editingItem.productName}
           onClose={() => setEditingId(null)}
-          onSave={(next) => onBlueprintLayoutSave?.(editingItem.id, next)}
+          onSave={(next, imageUrl) =>
+            onBlueprintLayoutSave?.(editingItem.id, next, imageUrl)
+          }
+          canUpload={!!customApiConn}
+          uploading={uploadingDrawingIds.has(editingItem.id)}
+          uploaded={uploadedDrawingIds.has(editingItem.id)}
+          onUpload={() => uploadHistoryDrawing(editingItem)}
         />
       )}
     </>

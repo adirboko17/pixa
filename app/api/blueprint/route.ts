@@ -18,34 +18,36 @@ function pickMime(name: string, fallback = "image/png") {
 
 function buildBlueprintPrompt(args: { productName: string }): string {
   const name = args.productName.trim().slice(0, 180) || "industrial product";
-  return `Target look: a manufacturer CATALOG TECHNICAL ILLUSTRATION of this exact product — like an architectural product plate / CAD presentation drawing.
+  return `TASK: CONVERT this photograph into a manufacturer CATALOG TECHNICAL LINE DRAWING of the same product.
+This is a STYLE TRANSFER, not a cutout. If the result still looks like a photo, you failed.
 
-REFERENCE STYLE (match this exactly):
-- Black ink outlines + soft light-gray volume shading on a pure white #FFFFFF page.
-- Looks drawn / illustrated, NEVER photographic. No photo pixels, no food photos, no glossy real-world lighting.
-- Clean, sharp, premium, slightly 3D because of the gray shading — not a flat cartoon, not a blueprint grid, not a photo with arrows pasted on it.
-- Think: industrial appliance spec sheet / architectural elevation of a commercial fridge.
+FORBIDDEN:
+- Do NOT keep photo pixels, color photography, reflections, chrome highlights, or real-world lighting.
+- Do NOT just remove the background of the source photo.
+- Do NOT output a photorealistic freezer / fridge.
 
-KEEP THE SAME CAMERA as the source photo: three-quarter view showing the front and one side (usually the left), so height, width and depth are all visible.
+REQUIRED LOOK:
+- Black ink outlines + soft light-gray volume shading only.
+- Drawn / illustrated, like an architectural product plate or CAD catalog illustration.
+- Clean, sharp, premium. Slightly 3D from gray shading — not a cartoon, not a blueprint grid.
+- Pure uniform white #FFFFFF page around the drawing.
 
-EMPTY THE INTERIOR (mandatory):
-- Remove every product, package, bottle, food item, label, and clutter from inside.
-- Draw empty factory-new wire shelves visible through the glass. You must see the vacant shelf rows.
-- Interior is clean, unused, showroom-empty.
+KEEP THE SAME CAMERA as the source: three-quarter view, front + one side visible.
+
+EMPTY THE INTERIOR:
+- Remove every product, package, bottle, food, label, and clutter from inside.
+- Draw empty factory-new wire shelves through the glass.
 
 KEEP THE REAL MACHINE:
-- Same door count, frames, handles, bottom ventilation grille, control panel, lock, casters/wheels.
-- Product title (do not print it): "${name}"
+- Same door count, frames, handles, vents, control panel, lock, casters/wheels.
+- Product (do not print the name): "${name}"
 - Do not invent a different model.
 
-DO NOT DRAW ANY DIMENSIONS:
-- No measurement lines, arrows, ticks, rulers, numbers, Hebrew text, "ס״מ", or title blocks.
-- The product drawing ONLY, isolated, with generous empty white margin on all sides.
-- We will add the dimension plate later in code. If you draw text or arrows, you failed.
+DO NOT DRAW DIMENSIONS:
+- No measurement lines, arrows, ticks, rulers, numbers, Hebrew, "ס״מ", or title blocks.
+- Product drawing only. We add dimensions later.
 
-OUTPUT: landscape plate, product centered, generous empty white margins.
-The page around the drawing must be perfectly uniform white.
-No paper texture, no drop shadow on the page, no gray backdrop.`;
+OUTPUT: square 1:1, product centered, generous white margins on every side.`;
 }
 
 /** Punch uniform page pixels to alpha, including holes inside digits (0 / 9 / ס / מ). */
@@ -111,7 +113,7 @@ async function knockoutWhiteBackground(pngBuffer: Buffer): Promise<Buffer> {
 
   // 1) Exterior page — flood from the frame so only background connected to the edge is cut.
   const edgeSeen = new Uint8Array(total);
-  const isPage = (idx: number) => isNearWhite(idx, 246, 8);
+  const isPage = (idx: number) => isNearWhite(idx, 225, 18);
   const edgeSeeds: number[] = [];
   for (let x = 0; x < width; x++) {
     edgeSeeds.push(x, (height - 1) * width + x);
@@ -248,7 +250,7 @@ export async function POST(req: NextRequest) {
       prompt: buildBlueprintPrompt({
         productName,
       }),
-      size: "1536x1024",
+      size: "1024x1024",
       quality: qualityRaw === "auto" ? "auto" : qualityRaw,
       background: "opaque",
       output_format: "png",

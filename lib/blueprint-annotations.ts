@@ -470,21 +470,28 @@ export async function prepareBlueprintPlate(
   dims: BlueprintDims
 ): Promise<{ png: Buffer; layout: BlueprintLayout }> {
   const g = await analyzeProduct(png);
-  const padL = 260;
-  const padR = g?.side === "right" ? 180 : 80;
-  const padT = 56;
-  const padB = 170;
-  const imgW = g?.imgW ?? (await sharp(png).metadata()).width ?? 1536;
+  const padL = 240;
+  const padR = g?.side === "right" ? 200 : 160;
+  const padT = 88;
+  const padB = 220;
+  const imgW = g?.imgW ?? (await sharp(png).metadata()).width ?? 1024;
   const imgH = g?.imgH ?? (await sharp(png).metadata()).height ?? 1024;
-  const canvasW = imgW + padL + padR;
-  const canvasH = imgH + padT + padB;
+  const innerW = imgW + padL + padR;
+  const innerH = imgH + padT + padB;
+  const side = Math.max(innerW, innerH);
+  const extraL = Math.floor((side - innerW) / 2);
+  const extraR = side - innerW - extraL;
+  const extraT = Math.floor((side - innerH) / 2);
+  const extraB = side - innerH - extraT;
+  const canvasW = side;
+  const canvasH = side;
   const padded = await sharp(png)
     .ensureAlpha()
     .extend({
-      top: padT,
-      bottom: padB,
-      left: padL,
-      right: padR,
+      top: padT + extraT,
+      bottom: padB + extraB,
+      left: padL + extraL,
+      right: padR + extraR,
       background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
     .png()
@@ -494,8 +501,8 @@ export async function prepareBlueprintPlate(
     return { png: padded, layout: { canvasW, canvasH, plates: [] } };
   }
 
-  const ox = padL;
-  const oy = padT;
+  const ox = padL + extraL;
+  const oy = padT + extraT;
   const origin = shift(g.center, ox, oy);
   const roof = oy + g.roof;
   const wheels = oy + g.wheels;
