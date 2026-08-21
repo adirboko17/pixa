@@ -70,6 +70,15 @@ export const Icons = {
   Sparkles: make(
     <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
   ),
+  Droplet: make(
+    <path d="M12 3s7 7.2 7 11.2A7 7 0 1 1 5 14.2C5 10.2 12 3 12 3z" />
+  ),
+  Ruler: make(
+    <>
+      <path d="M21.3 8.7 8.7 21.3a2 2 0 0 1-2.8 0L2.7 18.1a2 2 0 0 1 0-2.8L15.3 2.7a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8z" />
+      <path d="m7 14 1.5 1.5M10 11l1.5 1.5M13 8l1.5 1.5" />
+    </>
+  ),
   Wand: ({ size = 22, style, className, scale = 1.45 }: IconProps & { scale?: number }) => {
     const renderSize = size * scale;
     return (

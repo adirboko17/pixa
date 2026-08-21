@@ -65,7 +65,7 @@ function OpenAIBalanceLabel({ data }: { data: OpenAIBillingSnapshot | null }) {
    SIDEBAR
    ============================================================ */
 
-export type NavId = "dashboard" | "products" | "history" | "settings";
+export type NavId = "dashboard" | "products" | "blueprint" | "history" | "settings";
 
 export const Sidebar: React.FC<{
   current: NavId;
@@ -90,6 +90,7 @@ export const Sidebar: React.FC<{
       icon: I.Box,
       count: productsLoading ? "loading" : typeof productsCount === "number" ? productsCount : "",
     },
+    { id: "blueprint", label: "שרטוט מידות", icon: I.Ruler, count: "" },
     { id: "history", label: "היסטוריה", icon: I.History, count: historyCount ?? "" },
     { id: "settings", label: "הגדרות", icon: I.Settings, count: "" },
   ];
@@ -139,7 +140,7 @@ export const Sidebar: React.FC<{
       })}
 
       <div className="nav-label">פעולות מהירות</div>
-      <div className="nav-item" onClick={() => onNav("products")}>
+      <div className="nav-item" onClick={() => onNav("blueprint")}>
         <I.Sparkles size={17} />
         <span>עיצוב חדש</span>
       </div>

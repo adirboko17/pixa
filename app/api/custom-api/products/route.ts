@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { fetchCustomApiProducts } from "@/lib/custom-api-admin";
+import {
+  describeCustomApiError,
+  fetchCustomApiProducts,
+} from "@/lib/custom-api-admin";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
       total: products.length,
     });
   } catch (err: unknown) {
-    const m = err instanceof Error ? err.message : "שגיאה לא ידועה";
+    const m = describeCustomApiError(err);
     return NextResponse.json({ error: m }, { status: 502 });
   }
 }

@@ -10,7 +10,12 @@ import {
   resolveShopifyProductName,
   saveAfterProductMap,
 } from "@/lib/product-name-resolver";
-import { getBatchItemMeta, saveBatchItemMeta } from "@/lib/batch-item-meta";
+import { getBatchItemMeta, patchBatchItemMeta, saveBatchItemMeta } from "@/lib/batch-item-meta";
+import {
+  isPersistedItemId,
+  parseBlueprintLayout,
+} from "@/lib/blueprint-layout";
+import type { BlueprintLayout } from "@/lib/blueprint-annotations";
 
 const BUCKET = "processed-images";
 
@@ -182,6 +187,10 @@ export async function loadBatchHistory(userId: string): Promise<HistoryBatch[]> 
             item.shopify_product_id ?? meta?.shopifyProductId ?? undefined,
           externalProductId: meta?.externalProductId,
           sourceType: meta?.sourceType,
+          productId: meta?.productId ?? item.shopify_product_id ?? undefined,
+          blueprintLayout:
+            parseBlueprintLayout(item.blueprint_layout) ??
+            parseBlueprintLayout(meta?.blueprintLayout),
         };
       });
 
@@ -304,6 +313,7 @@ export async function persistBatch(
       status: result.error ? "failed" : "success",
       cost_usd: 0,
       error: result.error ?? null,
+      blueprint_layout: result.blueprintLayout ?? null,
     });
 
     if (itemError) {
@@ -313,6 +323,8 @@ export async function persistBatch(
         sourceType,
         shopifyProductId: result.isShopify ? result.productId : undefined,
         externalProductId: result.externalProductId,
+        productId: result.productId,
+        blueprintLayout: result.blueprintLayout,
       });
       if (afterUrl) {
         saveAfterProductMap(
@@ -333,6 +345,8 @@ export async function persistBatch(
       shopifyProductId: result.isShopify ? result.productId : undefined,
       externalProductId: result.externalProductId,
       sourceType,
+      productId: result.productId,
+      blueprintLayout: result.blueprintLayout,
     });
   }
 
@@ -404,4 +418,33 @@ export async function repairBatchHistoryNames(
   }
 
   return changed ? next : batches;
+}
+
+const layoutPersistTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export async function persistBlueprintLayout(
+  itemId: string,
+  layout: BlueprintLayout
+): Promise<void> {
+  if (!itemId) return;
+  patchBatchItemMeta(itemId, { blueprintLayout: layout });
+  if (!isPersistedItemId(itemId)) return;
+
+  const prev = layoutPersistTimers.get(itemId);
+  if (prev) clearTimeout(prev);
+
+  const timer = setTimeout(() => {
+    layoutPersistTimers.delete(itemId);
+    const supabase = createClient();
+    void supabase
+      .from("batch_items")
+      .update({ blueprint_layout: layout })
+      .eq("id", itemId)
+      .then(({ error }) => {
+        if (error) {
+          console.error("[history] failed to save blueprint layout", error);
+        }
+      });
+  }, 500);
+  layoutPersistTimers.set(itemId, timer);
 }

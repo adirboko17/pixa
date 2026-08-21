@@ -2,6 +2,7 @@
 // Credentials stay in localStorage — sent to our server proxy on each request.
 
 import type { CustomApiStoreConnection } from "@/lib/store-connection";
+import type { ProductDimensions } from "@/lib/product-dimensions";
 
 async function postJson<T>(
   path: string,
@@ -30,6 +31,7 @@ export type CustomApiProduct = {
   title: string;
   image_url?: string | null;
   images?: CustomApiImage[];
+  dimensions?: ProductDimensions;
 };
 
 export async function validateCustomApiConnection(
@@ -64,6 +66,23 @@ export async function uploadCustomApiProductImage(
     base64: args.base64,
     filename: args.filename,
     alt: args.alt,
+  });
+}
+
+export async function uploadCustomApiProductDrawing(
+  conn: CustomApiStoreConnection,
+  args: {
+    productId: string;
+    base64: string;
+    filename?: string;
+  }
+): Promise<{ success: true; listing_id: string; drawing_url: string }> {
+  return postJson("/api/custom-api/upload-drawing", {
+    apiUrl: conn.apiUrl,
+    apiKey: conn.apiKey,
+    productId: args.productId,
+    base64: args.base64,
+    filename: args.filename ?? "drawing.png",
   });
 }
 

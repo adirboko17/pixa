@@ -1,6 +1,21 @@
 // Server-side helpers for proxying requests to a Lovable / Supabase Edge Function.
 
+import { extractDimensionsFromProduct, type ProductDimensions } from "@/lib/product-dimensions";
+
 export const CUSTOM_API_TIMEOUT_MS = 20_000;
+export const CUSTOM_API_DRAWING_TIMEOUT_MS = 60_000;
+
+export const PRODUCT_NOT_ON_CATALOG_MESSAGE =
+  "המוצר עדיין לא באתר. הוסף אותו קודם בניהול האתר.";
+
+export class CustomApiRequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "CustomApiRequestError";
+    this.status = status;
+  }
+}
 
 export type CustomApiCredentials = {
   apiUrl: string;
@@ -10,21 +25,43 @@ export type CustomApiCredentials = {
 export function normalizeCustomApiUrl(input: string): string {
   let s = (input || "").trim();
   if (!s) throw new Error("חסר כתובת API");
+  s = s.replace(/\\/g, "/");
+  s = s.replace(/^https?:\/\/https?:\/\//i, (m) =>
+    m.toLowerCase().includes("https") ? "https://" : "http://"
+  );
   if (!/^https?:\/\//i.test(s)) s = "https://" + s;
   const u = new URL(s);
   return u.toString().replace(/\/+$/, "");
 }
 
+export function describeCustomApiError(err: unknown): string {
+  if (err instanceof CustomApiRequestError) return err.message;
+  if (!(err instanceof Error)) return "שגיאה לא ידועה";
+  const cause = (err as Error & { cause?: { code?: string; message?: string } })
+    .cause;
+  const raw = [err.message, cause?.message, cause?.code]
+    .filter(Boolean)
+    .join(" ");
+  if (/abort|aborted|timeout/i.test(raw)) {
+    return "ה-API לא הגיב בזמן. נסה שוב בעוד רגע.";
+  }
+  if (/fetch failed|ECONNRESET|ENOTFOUND|ENETUNREACH|certificate|ECONNREFUSED/i.test(raw)) {
+    return "לא הצלחנו להגיע ל-API. ודא שהכתובת עם / רגילים (לא \\) ושאין רווחים בסוף.";
+  }
+  return err.message;
+}
+
 async function customApiFetch(
   creds: CustomApiCredentials,
   path: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  timeoutMs = CUSTOM_API_TIMEOUT_MS
 ): Promise<Response> {
   const base = normalizeCustomApiUrl(creds.apiUrl);
   const url = path ? `${base}${path.startsWith("/") ? path : `/${path}`}` : base;
 
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), CUSTOM_API_TIMEOUT_MS);
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     return await fetch(url, {
       ...init,
@@ -46,6 +83,7 @@ export type NormalizedCustomProduct = {
   title: string;
   image_url?: string | null;
   images: Array<{ url: string; position?: number; alt?: string | null }>;
+  dimensions?: ProductDimensions;
 };
 
 function pickImageUrl(raw: Record<string, unknown>): string | null {
@@ -103,6 +141,7 @@ function normalizeProduct(raw: Record<string, unknown>): NormalizedCustomProduct
     title,
     image_url: imageUrl,
     images,
+    dimensions: extractDimensionsFromProduct(raw, title),
   };
 }
 
@@ -112,7 +151,9 @@ export async function fetchCustomApiProducts(
   const res = await customApiFetch(creds, "/products", { method: "GET" });
 
   if (res.status === 401 || res.status === 403) {
-    throw new Error("אימות נכשל. בדוק את ה-API Key.");
+    throw new Error(
+      "אימות נכשל. ה-API Key השמור לא תואם ל-PHOTOSPRO_API_KEY בפונקציה photospro-api. חבר מחדש בהגדרות עם המפתח העדכני."
+    );
   }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -180,4 +221,51 @@ export async function uploadCustomApiImage(
   }
 
   return { newImageUrl };
+}
+
+export async function uploadCustomApiDrawing(
+  creds: CustomApiCredentials,
+  args: {
+    productId: string;
+    base64: string;
+    filename?: string;
+  }
+): Promise<{ listingId: string; drawingUrl: string }> {
+  const res = await customApiFetch(
+    creds,
+    `/products/${args.productId}/drawing`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        image_base64: args.base64,
+        filename: args.filename ?? "drawing.png",
+      }),
+    },
+    CUSTOM_API_DRAWING_TIMEOUT_MS
+  );
+
+  if (res.status === 404) {
+    throw new CustomApiRequestError(PRODUCT_NOT_ON_CATALOG_MESSAGE, 404);
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new CustomApiRequestError("אימות נכשל. בדוק את ה-API Key.", res.status);
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`שגיאה בהעלאת שרטוט ${res.status}${t ? `: ${t.slice(0, 200)}` : ""}`);
+  }
+
+  const data = (await res.json()) as Record<string, unknown>;
+  const drawingUrl =
+    (data.drawing_url as string) ||
+    (data.drawingUrl as string) ||
+    "";
+  const listingId = String(data.listing_id ?? data.listingId ?? "");
+
+  if (!drawingUrl) {
+    throw new Error("ה-API לא החזיר כתובת שרטוט");
+  }
+
+  return { listingId, drawingUrl };
 }

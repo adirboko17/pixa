@@ -20,6 +20,7 @@ export type Database = {
           after_url: string | null;
           batch_id: string;
           before_url: string | null;
+          blueprint_layout: Json | null;
           cost_usd: number;
           created_at: string;
           error: string | null;
@@ -36,6 +37,7 @@ export type Database = {
           after_url?: string | null;
           batch_id: string;
           before_url?: string | null;
+          blueprint_layout?: Json | null;
           cost_usd?: number;
           created_at?: string;
           error?: string | null;
@@ -52,6 +54,7 @@ export type Database = {
           after_url?: string | null;
           batch_id?: string;
           before_url?: string | null;
+          blueprint_layout?: Json | null;
           cost_usd?: number;
           created_at?: string;
           error?: string | null;

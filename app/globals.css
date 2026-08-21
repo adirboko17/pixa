@@ -1247,6 +1247,16 @@ body[data-density="spacious"] {
   background: var(--bg-card);
   border: 1px solid var(--hair);
 }
+.result-img-wrap--checker {
+  background-color: #ece8e0;
+  background-image:
+    linear-gradient(45deg, #d8d2c6 25%, transparent 25%),
+    linear-gradient(-45deg, #d8d2c6 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d8d2c6 75%),
+    linear-gradient(-45deg, transparent 75%, #d8d2c6 75%);
+  background-size: 18px 18px;
+  background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+}
 .result-img-wrap--clickable {
   cursor: zoom-in;
   transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);

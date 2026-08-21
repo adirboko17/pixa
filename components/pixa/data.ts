@@ -1,3 +1,6 @@
+import type { ProductDimensions } from "@/lib/product-dimensions";
+import type { BlueprintLayout } from "@/lib/blueprint-annotations";
+
 export type Category = {
   id: string;
   name: string;
@@ -15,6 +18,8 @@ export type Product = {
   optimized: boolean;
   /** Unix ms — when the product was added (Shopify createdAt or local upload). */
   createdAt?: number;
+  /** Optional physical size in cm, from store data or parsed from the title. */
+  dimensions?: ProductDimensions;
 };
 
 /**
@@ -57,12 +62,18 @@ export type Preset = {
   comingSoon?: boolean;
 };
 
+export type RecolorScope = "both" | "exterior" | "interior";
+
 export type ProcessingOptions = {
   presetId: string;
   removeBackground: boolean;
   keepProportion: boolean;
   /** Keep every identical unit in a pack/bundle photo (default true). */
   preservePackUnits: boolean;
+  recolorHex?: string;
+  recolorLabel?: string;
+  recolorScope?: RecolorScope;
+  emptyInterior?: boolean;
 };
 
 /** @deprecated Demo-only — not used in production screens. */
@@ -85,6 +96,9 @@ export type HistoryBatchItem = {
   shopifyProductId?: number;
   externalProductId?: string;
   sourceType?: "shopify" | "custom-api" | "upload";
+  /** Local catalog id from the batch that created this item. */
+  productId?: number;
+  blueprintLayout?: BlueprintLayout;
   /** Set by UI when item was already published to the store. */
   published?: boolean;
   /** Whether this item can be published from history. */
@@ -142,6 +156,16 @@ export const PRODUCTS: Product[] = [
   { id: 24, name: "יין אדום יוקרתי", price: 220, category: "food", img: "photo-1553361371-9b22f78e8b1d", optimized: false },
 ];
 
+export const CATALOG_PRO_PRESET_ID = "catalog-pro";
+export const PRODUCT_RECOLOR_PRESET_ID = "product-recolor";
+export const EMPTY_INTERIOR_PRESET_ID = "empty-interior";
+
+export const CATALOG_STYLE_PRESET_IDS = new Set([
+  CATALOG_PRO_PRESET_ID,
+  PRODUCT_RECOLOR_PRESET_ID,
+  EMPTY_INTERIOR_PRESET_ID,
+]);
+
 export const PRESETS: Preset[] = [
   {
     id: "studio-white",
@@ -149,7 +173,34 @@ export const PRESETS: Preset[] = [
     tag: "הכי פופולרי",
     gradient: "linear-gradient(135deg, #f8f8f8, #e0e0e0)",
     accent: "#fff",
-    desc: "רקע לבן נקי, צל רך",
+    desc: "שומר על המוצר כמו שהוא, על רקע לבן נקי",
+    available: true,
+  },
+  {
+    id: CATALOG_PRO_PRESET_ID,
+    name: "קטלוג מקצועי",
+    tag: "חדש",
+    gradient: "linear-gradient(135deg, #ffffff, #d8d2e8 45%, #b040e0)",
+    accent: "#B040E0",
+    desc: "מעצב מחדש תמונה חלשה: משלים מוצר חתוך ומסדר פנים מבולגן",
+    available: true,
+  },
+  {
+    id: PRODUCT_RECOLOR_PRESET_ID,
+    name: "צביעת מוצר",
+    tag: "חדש",
+    gradient: "linear-gradient(135deg, #111111, #4a4a4a 40%, #c8c8c8)",
+    accent: "#111",
+    desc: "צובע את המוצר בצבע שבחרת — פנים, חוץ, או שניהם",
+    available: true,
+  },
+  {
+    id: EMPTY_INTERIOR_PRESET_ID,
+    name: "ריקון פנים",
+    tag: "חדש",
+    gradient: "linear-gradient(135deg, #f4f4f4, #d0d5dc)",
+    accent: "#9aa3ad",
+    desc: "מרוקן מקרר / ארון ממוצרים ושומר על מספר המדפים",
     available: true,
   },
   {

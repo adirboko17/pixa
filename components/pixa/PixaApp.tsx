@@ -10,6 +10,10 @@ import {
   type StoreBackedProduct,
   type ProcessingOptions,
   PRESETS,
+  CATALOG_PRO_PRESET_ID,
+  CATALOG_STYLE_PRESET_IDS,
+  EMPTY_INTERIOR_PRESET_ID,
+  PRODUCT_RECOLOR_PRESET_ID,
 } from "./data";
 import { createClient } from "@/lib/supabase/client";
 import { signOut } from "@/lib/supabase/auth";
@@ -32,8 +36,11 @@ import {
   type UploadedProduct,
   type AnyProduct,
   type ProcessedResult,
+  type BlueprintDims,
 } from "./screens-app";
 import { RegisterScreen } from "./screens-register";
+import { BlueprintScreen, type BlueprintJob } from "./screens-blueprint";
+import type { BlueprintLayout } from "@/lib/blueprint-annotations";
 import {
   listCollections,
   listProducts,
@@ -60,7 +67,12 @@ import {
   persistRemoteStoreConnection,
 } from "@/lib/store-connection-remote";
 import type { Quality } from "@/lib/pricing";
-import { loadBatchHistory, persistBatch, repairBatchHistoryNames } from "@/lib/batch-history";
+import {
+  loadBatchHistory,
+  persistBatch,
+  persistBlueprintLayout,
+  repairBatchHistoryNames,
+} from "@/lib/batch-history";
 import { markItemPublished } from "@/lib/publish-tracker";
 import { isLegacyBatchProductName } from "@/lib/product-name-resolver";
 
@@ -115,6 +127,7 @@ function mapCustomApiToProducts(
         optimized: false,
         isCustomApi: true,
         imageUrl,
+        dimensions: p.dimensions,
       };
     })
     .filter((p): p is CustomBackedProduct => p !== null);
@@ -161,6 +174,12 @@ export default function PixaApp() {
   const processingQuality: Quality = "low";
   const [processingProducts, setProcessingProducts] = useState<AnyProduct[]>(
     []
+  );
+  const [blueprintDimsByProduct, setBlueprintDimsByProduct] = useState<
+    Record<number, BlueprintDims> | undefined
+  >(undefined);
+  const [resultsBack, setResultsBack] = useState<"products" | "blueprint">(
+    "products"
   );
   const [pendingBatchIds, setPendingBatchIds] = useState<number[]>([]);
   const [results, setResults] = useState<ProcessedResult[]>([]);
@@ -595,10 +614,104 @@ export default function PixaApp() {
       setShowPresetModal(false);
       return;
     }
+    setBlueprintDimsByProduct(undefined);
+    setResultsBack("products");
     setProcessingProducts(items);
     setShowPresetModal(false);
     setShowProcessing(true);
   };
+
+  const startBlueprint = (jobs: BlueprintJob[]) => {
+    if (!jobs.length) return;
+    const byId: Record<number, BlueprintDims> = {};
+    for (const job of jobs) byId[job.product.id] = job.dims;
+    setActivePreset("blueprint");
+    setBlueprintDimsByProduct(byId);
+    setResultsBack("blueprint");
+    setProcessingProducts(jobs.map((job) => job.product));
+    setShowProcessing(true);
+  };
+
+  const startCatalog = (items: AnyProduct[]) => {
+    if (!items.length) return;
+    setActivePreset(CATALOG_PRO_PRESET_ID);
+    setProcessingOptions({
+      presetId: CATALOG_PRO_PRESET_ID,
+      removeBackground: true,
+      keepProportion: false,
+      preservePackUnits: true,
+    });
+    setBlueprintDimsByProduct(undefined);
+    setResultsBack("blueprint");
+    setProcessingProducts(items);
+    setShowProcessing(true);
+  };
+
+  const startRestyle = (
+    items: AnyProduct[],
+    extras: Partial<ProcessingOptions>
+  ) => {
+    if (!items.length) return;
+    const presetId = extras.recolorHex
+      ? PRODUCT_RECOLOR_PRESET_ID
+      : extras.emptyInterior
+        ? EMPTY_INTERIOR_PRESET_ID
+        : CATALOG_PRO_PRESET_ID;
+    setActivePreset(presetId);
+    setProcessingOptions({
+      presetId,
+      removeBackground: true,
+      keepProportion: false,
+      preservePackUnits: true,
+      ...extras,
+    });
+    setBlueprintDimsByProduct(undefined);
+    setResultsBack("blueprint");
+    setProcessingProducts(items);
+    setShowProcessing(true);
+  };
+
+  const applyBlueprintLayout = useCallback(
+    (match: { productId?: number; itemId?: string }, layout: BlueprintLayout) => {
+      const productId =
+        match.productId ??
+        batchHistory
+          .flatMap((batch) => batch.items ?? [])
+          .find((item) => item.id === match.itemId)?.productId;
+      if (productId != null) {
+        setResults((prev) =>
+          prev.map((r) =>
+            r.productId === productId ? { ...r, blueprintLayout: layout } : r
+          )
+        );
+      }
+      setBatchHistory((prev) =>
+        prev.map((batch) => ({
+          ...batch,
+          items: batch.items?.map((item) => {
+            const hit =
+              (match.itemId && item.id === match.itemId) ||
+              (match.productId != null && item.productId === match.productId);
+            return hit ? { ...item, blueprintLayout: layout } : item;
+          }),
+        }))
+      );
+      const ids = new Set<string>();
+      if (match.itemId) ids.add(match.itemId);
+      for (const batch of batchHistory) {
+        for (const item of batch.items ?? []) {
+          if (match.itemId && item.id === match.itemId) ids.add(item.id);
+          if (match.productId != null && item.productId === match.productId) {
+            ids.add(item.id);
+          }
+        }
+      }
+      for (const id of ids) {
+        void persistBlueprintLayout(id, layout);
+      }
+    },
+    [batchHistory]
+  );
 
   const finishProcessing = useCallback((res: ProcessedResult[]) => {
     setResults(res);
@@ -624,11 +737,15 @@ export default function PixaApp() {
     const successful = res.filter((r) => !r.error).length;
     const failed = res.filter((r) => r.error).length;
     const presetName =
-      PRESETS.find((p) => p.id === activePreset)?.name ?? activePreset;
+      PRESETS.find((p) => p.id === activePreset)?.name ??
+      (activePreset === "blueprint" ? "שרטוט מידות" : activePreset);
     const batchId = crypto.randomUUID();
     const optimisticBatch: HistoryBatch = {
       id: batchId,
-      name: `עיצוב · ${presetName}`,
+      name:
+        activePreset === "blueprint"
+          ? `שרטוט · ${presetName}`
+          : `עיצוב · ${presetName}`,
       preset: activePreset,
       count: res.length,
       successful,
@@ -655,6 +772,8 @@ export default function PixaApp() {
           : r.isShopify
             ? "shopify"
             : "upload",
+        productId: r.productId,
+        blueprintLayout: r.blueprintLayout,
       })),
     };
 
@@ -672,7 +791,29 @@ export default function PixaApp() {
         .then((saved) => {
           if (!saved) return;
           setBatchHistory((prev) =>
-            prev.map((b) => (b.id === batchId ? saved : b))
+            prev.map((b) => {
+              if (b.id !== batchId) return b;
+              const layoutByPid = new Map(
+                (b.items ?? [])
+                  .filter((item) => item.productId != null && item.blueprintLayout)
+                  .map((item) => [item.productId!, item.blueprintLayout!])
+              );
+              const merged = {
+                ...saved,
+                items: saved.items?.map((item) => {
+                  const newer =
+                    item.productId != null
+                      ? layoutByPid.get(item.productId)
+                      : undefined;
+                  if (newer && newer !== item.blueprintLayout) {
+                    void persistBlueprintLayout(item.id, newer);
+                    return { ...item, blueprintLayout: newer };
+                  }
+                  return item;
+                }),
+              };
+              return merged;
+            })
           );
         })
         .catch((err) => {
@@ -862,7 +1003,11 @@ export default function PixaApp() {
     );
 
   const currentNav: NavId =
-    route === "results" ? "products" : (route as NavId);
+    route === "results"
+      ? activePreset === "blueprint"
+        ? "blueprint"
+        : "products"
+      : (route as NavId);
 
   return (
     <Frame>
@@ -909,6 +1054,7 @@ export default function PixaApp() {
             onStartBatch={startBatch}
             uploads={uploads}
             onAddUploads={handleAddUploads}
+            connection={connection}
             shopifyProducts={shopifyProducts}
             shopifyCategories={shopifyCategories}
             shopifyCatalogTotal={shopifyCatalogTotal}
@@ -927,12 +1073,24 @@ export default function PixaApp() {
             hideBulkBar={showPresetModal || showProcessing}
           />
         )}
+        {route === "blueprint" && (
+          <BlueprintScreen
+            products={allAvailable}
+            loading={!!connection && loadingShopify}
+            onGenerate={startBlueprint}
+            onCatalog={startCatalog}
+            onRestyle={startRestyle}
+          />
+        )}
         {route === "history" && (
           <HistoryScreen
             batches={batchHistory}
             connection={connection}
             storeProducts={shopifyProducts}
             onToast={pushToast}
+            onBlueprintLayoutSave={(itemId, layout) =>
+              applyBlueprintLayout({ itemId }, layout)
+            }
             onPublishComplete={(publishedProductIds) => {
               if (publishedProductIds.size > 0) {
                 setShopifyProducts((prev) =>
@@ -961,8 +1119,27 @@ export default function PixaApp() {
             results={results}
             presetId={activePreset}
             connection={connection}
-            onPublish={publishResults}
-            onBack={() => setRoute("products")}
+            mode={activePreset === "blueprint" ? "blueprint" : "studio"}
+            onPublish={
+              activePreset === "blueprint"
+                ? async (ids) => {
+                    const toSave = results.filter(
+                      (r) =>
+                        ids.includes(r.productId) && r.isReal && !r.error
+                    );
+                    pushToast(
+                      toSave.length
+                        ? `${toSave.length} שרטוטים הורדו`
+                        : "אין שרטוט להורדה"
+                    );
+                  }
+                : publishResults
+            }
+            onLayoutChange={(productId, layout) =>
+              applyBlueprintLayout({ productId }, layout)
+            }
+            onToast={pushToast}
+            onBack={() => setRoute(resultsBack)}
           />
         )}
       </Layout>
@@ -981,7 +1158,15 @@ export default function PixaApp() {
           products={processingProducts}
           presetId={activePreset}
           processingOptions={processingOptions}
-          quality={processingQuality}
+          quality={
+            activePreset === "blueprint" ||
+            CATALOG_STYLE_PRESET_IDS.has(activePreset)
+              ? "high"
+              : processingQuality
+          }
+          blueprintDimsByProduct={
+            activePreset === "blueprint" ? blueprintDimsByProduct : undefined
+          }
           onDone={finishProcessing}
         />
       )}

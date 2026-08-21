@@ -15,6 +15,7 @@ function isCustomApiProduct(p: StoreBackedProduct): p is CustomBackedProduct {
   return "isCustomApi" in p && p.isCustomApi === true;
 }
 import { getBatchItemMeta } from "@/lib/batch-item-meta";
+import { parseBlueprintLayout } from "@/lib/blueprint-layout";
 import { markItemPublished } from "@/lib/publish-tracker";
 import type { StoreConnection } from "@/lib/store-connection";
 
@@ -77,8 +78,11 @@ export function enrichHistoryItem(
 
   return {
     ...item,
-    externalProductId: meta?.externalProductId,
-    sourceType: meta?.sourceType,
+    externalProductId: meta?.externalProductId ?? item.externalProductId,
+    sourceType: meta?.sourceType ?? item.sourceType,
+    productId: item.productId ?? meta?.productId,
+    blueprintLayout:
+      item.blueprintLayout ?? parseBlueprintLayout(meta?.blueprintLayout),
     published,
     publishable: publishable && !published,
   };

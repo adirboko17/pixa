@@ -8,7 +8,21 @@ export type BatchItemMeta = {
   sourceType: BatchItemSourceType;
   shopifyProductId?: number;
   externalProductId?: string;
+  productId?: number;
+  blueprintLayout?: unknown;
 };
+
+export function patchBatchItemMeta(
+  itemId: string,
+  patch: Partial<BatchItemMeta>
+): void {
+  const prev = getBatchItemMeta(itemId);
+  saveBatchItemMeta(itemId, {
+    sourceType: prev?.sourceType ?? "upload",
+    ...prev,
+    ...patch,
+  });
+}
 
 function readMetaMap(): Record<string, BatchItemMeta> {
   if (typeof window === "undefined") return {};

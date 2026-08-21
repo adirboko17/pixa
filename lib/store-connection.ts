@@ -31,6 +31,7 @@ export type StoreConnection = ShopifyStoreConnection | CustomApiStoreConnection;
 export function normalizeApiUrl(input: string): string {
   let s = (input || "").trim();
   if (!s) return s;
+  s = s.replace(/\\/g, "/");
   s = s.replace(/\/+$/, "");
   return s;
 }

@@ -4,6 +4,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Icons } from "./icons";
 import {
   PRESETS,
+  CATALOG_PRO_PRESET_ID,
+  CATALOG_STYLE_PRESET_IDS,
+  EMPTY_INTERIOR_PRESET_ID,
+  PRODUCT_RECOLOR_PRESET_ID,
   buildImgUrl,
   fmtDate,
   fmtMonthYear,
@@ -17,14 +21,26 @@ import {
   type HistoryBatch,
   type HistoryBatchItem,
   type ProcessingOptions,
+  type RecolorScope,
 } from "./data";
 import type { StoreConnection } from "@/lib/store-connection";
-import { getConnectionPlatformLabel } from "@/lib/store-connection";
+import {
+  getConnectionLabel,
+  getConnectionPlatformLabel,
+} from "@/lib/store-connection";
+import { uploadFlattenedDrawing } from "@/lib/upload-blueprint-drawing";
+import { getBatchItemMeta } from "@/lib/batch-item-meta";
 import { type Quality, type ImageSize } from "@/lib/pricing";
 import { Spinner } from "./screens-shell";
 import { useOpenAIBalance } from "./use-openai-balance";
 import { StarLoader } from "./StarLoader";
 import { BulkBar } from "./BulkBar";
+import {
+  BlueprintEditorModal,
+  BlueprintPreview,
+  flattenBlueprint,
+} from "./BlueprintEditor";
+import type { BlueprintLayout } from "@/lib/blueprint-annotations";
 import { isItemPublished } from "@/lib/publish-tracker";
 import {
   enrichHistoryItem,
@@ -1000,8 +1016,9 @@ export const ProductsScreen: React.FC<{
   onReloadShopify?: () => void;
   /** Reload catalog filtered by a Shopify collection id. */
   onFilterCollection?: (collectionId?: string) => void;
-  /** Whether the user is connected to Shopify at all. */
+  /** Whether the user is connected to a store at all. */
   connected: boolean;
+  connection?: StoreConnection | null;
   /** Take the user to the connect screen. */
   onConnect?: () => void;
   /** Hide the floating selection bar (e.g. while preset/processing modal is open). */
@@ -1020,6 +1037,7 @@ export const ProductsScreen: React.FC<{
   onReloadShopify,
   onFilterCollection,
   connected,
+  connection = null,
   onConnect,
   hideBulkBar = false,
 }) => {
@@ -1210,7 +1228,11 @@ export const ProductsScreen: React.FC<{
             gap: 16,
           }}
         >
-          <span>שגיאה בטעינה מ-Shopify · {shopifyError}</span>
+          <span>
+            שגיאה בטעינה מ-
+            {connection ? getConnectionLabel(connection) : "החנות"}{" "}
+            · {shopifyError}
+          </span>
           {onReloadShopify && (
             <button className="btn btn-ghost" onClick={onReloadShopify}>
               נסה שוב
@@ -1526,9 +1548,25 @@ export const PresetPickerModal: React.FC<{
   const [removeBackground, setRemoveBackground] = useState(true);
   const [keepProportion, setKeepProportion] = useState(true);
   const [preservePackUnits, setPreservePackUnits] = useState(true);
+  const [recolorHex, setRecolorHex] = useState("#111111");
+  const [recolorLabel, setRecolorLabel] = useState("שחור");
+  const [recolorScope, setRecolorScope] = useState<RecolorScope>("both");
+  const [emptyInterior, setEmptyInterior] = useState(false);
+
+  const pickPreset = (id: string) => {
+    setPicked(id);
+    if (CATALOG_STYLE_PRESET_IDS.has(id)) {
+      setRemoveBackground(true);
+      setKeepProportion(false);
+    }
+    setEmptyInterior(id === EMPTY_INTERIOR_PRESET_ID);
+  };
 
   const pickedPreset = PRESETS.find((p) => p.id === picked);
-  const canStart = pickedPreset?.available !== false;
+  const canStart =
+    pickedPreset?.available !== false &&
+    (picked !== PRODUCT_RECOLOR_PRESET_ID ||
+      /^#?[0-9a-fA-F]{6}$/.test(recolorHex));
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -1560,7 +1598,7 @@ export const PresetPickerModal: React.FC<{
                     locked ? " coming-soon" : ""
                   }`}
                   onClick={() => {
-                    if (!locked) setPicked(preset.id);
+                    if (!locked) pickPreset(preset.id);
                   }}
                   aria-disabled={locked}
                 >
@@ -1608,6 +1646,79 @@ export const PresetPickerModal: React.FC<{
             })}
           </div>
 
+          {picked === PRODUCT_RECOLOR_PRESET_ID && (
+            <div style={{ marginTop: 16 }}>
+              <div className="eyebrow" style={{ marginBottom: 10 }}>
+                צבע המוצר
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                {[
+                  ["שחור", "#111111"],
+                  ["גרפיט", "#3A3A3A"],
+                  ["לבן", "#F3F3F3"],
+                  ["כסף", "#C0C4C8"],
+                ].map(([label, hex]) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    className={
+                      recolorHex.toLowerCase() === hex.toLowerCase()
+                        ? "btn btn-primary"
+                        : "btn btn-ghost"
+                    }
+                    onClick={() => {
+                      setRecolorHex(hex);
+                      setRecolorLabel(label);
+                    }}
+                    style={{ height: 36 }}
+                  >
+                    <span
+                      style={{
+                        width: 12,
+                        height: 12,
+                        borderRadius: 99,
+                        background: hex,
+                        border: "1px solid rgba(0,0,0,.2)",
+                      }}
+                    />
+                    {label}
+                  </button>
+                ))}
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="color"
+                    value={/^#[0-9a-fA-F]{6}$/.test(recolorHex) ? recolorHex : "#111111"}
+                    onChange={(e) => {
+                      setRecolorHex(e.target.value);
+                      setRecolorLabel("מותאם");
+                    }}
+                    style={{ width: 36, height: 32, border: 0, background: "none" }}
+                  />
+                  מותאם
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {(
+                  [
+                    ["both", "פנים וחוץ"],
+                    ["exterior", "רק חוץ"],
+                    ["interior", "רק פנים"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={recolorScope === id ? "btn btn-primary" : "btn btn-ghost"}
+                    onClick={() => setRecolorScope(id)}
+                    style={{ height: 34 }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <hr className="hr" style={{ margin: "18px 0" }} />
 
           <div>
@@ -1629,9 +1740,14 @@ export const PresetPickerModal: React.FC<{
               />
               <ToggleRow
                 label="שמירה על פרופורציות המוצר"
-                hint="שמור על יחס הגובה-רוחב והגודל היחסי בתוך התמונה"
+                hint={
+                  CATALOG_STYLE_PRESET_IDS.has(picked)
+                    ? "כבוי בעיצוב קטלוג — כדי שאפשר להשלים מוצר חתוך"
+                    : "שמור על יחס הגובה-רוחב והגודל היחסי בתוך התמונה"
+                }
                 on={keepProportion}
                 setOn={setKeepProportion}
+                disabled={CATALOG_STYLE_PRESET_IDS.has(picked)}
               />
               <ToggleRow
                 label="שמירת כל היחידות במארז"
@@ -1690,6 +1806,11 @@ export const PresetPickerModal: React.FC<{
                   removeBackground,
                   keepProportion,
                   preservePackUnits,
+                  emptyInterior:
+                    emptyInterior || picked === EMPTY_INTERIOR_PRESET_ID,
+                  ...(picked === PRODUCT_RECOLOR_PRESET_ID
+                    ? { recolorHex, recolorLabel, recolorScope }
+                    : {}),
                 })
               }
               style={{ opacity: canStart ? 1 : 0.5 }}
@@ -1708,7 +1829,8 @@ const ToggleRow: React.FC<{
   hint?: string;
   on: boolean;
   setOn: React.Dispatch<React.SetStateAction<boolean>>;
-}> = ({ label, hint, on, setOn }) => (
+  disabled?: boolean;
+}> = ({ label, hint, on, setOn, disabled }) => (
   <div
     style={{
       display: "flex",
@@ -1726,11 +1848,15 @@ const ToggleRow: React.FC<{
       ) : null}
     </div>
     <button
-      onClick={() => setOn((v) => !v)}
+      onClick={() => {
+        if (!disabled) setOn((v) => !v);
+      }}
+      disabled={disabled}
       style={{
         width: 38,
         height: 22,
         borderRadius: 999,
+        opacity: disabled ? 0.45 : 1,
         position: "relative",
         background: on ? "var(--grad)" : "var(--bg-card-hi)",
         transition: "background .2s",
@@ -1762,6 +1888,7 @@ export type ProcessedResult = {
   afterUrl: string;
   /** The base64 (no data: prefix) of the AI output, ready to upload to Shopify. */
   afterBase64?: string;
+  blueprintLayout?: import("@/lib/blueprint-annotations").BlueprintLayout;
   name: string;
   /** True iff we actually ran the AI on a real image. */
   isReal: boolean;
@@ -1801,18 +1928,54 @@ async function urlToFile(
 function parseProcessedImage(data: {
   image?: string;
   imageBase64?: string;
-}): { afterUrl: string; afterBase64: string } | null {
+  layout?: import("@/lib/blueprint-annotations").BlueprintLayout;
+}): {
+  afterUrl: string;
+  afterBase64: string;
+  blueprintLayout?: import("@/lib/blueprint-annotations").BlueprintLayout;
+} | null {
   const raw = data.imageBase64 ?? data.image;
   if (!raw || typeof raw !== "string") return null;
+  const blueprintLayout =
+    data.layout && data.layout.canvasW > 0 ? data.layout : undefined;
   if (raw.startsWith("data:")) {
     const afterBase64 = raw.split(",")[1];
     if (!afterBase64) return null;
-    return { afterUrl: raw, afterBase64 };
+    return { afterUrl: raw, afterBase64, blueprintLayout };
   }
   return {
     afterUrl: `data:image/png;base64,${raw}`,
     afterBase64: raw,
+    blueprintLayout,
   };
+}
+
+export type BlueprintDims = {
+  widthCm: number;
+  heightCm: number;
+  depthCm: number;
+};
+
+const BLUEPRINT_CONCURRENCY = 2;
+
+async function runPool<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  const run = async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      await worker(items[i], i);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, () =>
+      run()
+    )
+  );
 }
 
 export const ProcessingOverlay: React.FC<{
@@ -1821,10 +1984,23 @@ export const ProcessingOverlay: React.FC<{
   processingOptions: ProcessingOptions;
   quality: Quality;
   onDone: (results: ProcessedResult[]) => void;
-}> = ({ products, presetId, processingOptions, quality, onDone }) => {
+  blueprintDimsByProduct?: Record<number, BlueprintDims>;
+}> = ({
+  products,
+  presetId,
+  processingOptions,
+  quality,
+  onDone,
+  blueprintDimsByProduct,
+}) => {
+  const isBlueprint = presetId === "blueprint" || !!blueprintDimsByProduct;
+  const isCatalogStyle = CATALOG_STYLE_PRESET_IDS.has(presetId);
+  const isCatalogPro = presetId === CATALOG_PRO_PRESET_ID;
+  const useQueue = isBlueprint || isCatalogStyle;
   const [progress, setProgress] = useState(0);
   const [doneIds, setDoneIds] = useState<number[]>([]);
-  const [activeName, setActiveName] = useState<string>("");
+  const [activeIds, setActiveIds] = useState<number[]>([]);
+  const [activeNames, setActiveNames] = useState<string[]>([]);
   const [phase, setPhase] = useState<"download" | "process" | "done">(
     "download"
   );
@@ -1834,34 +2010,54 @@ export const ProcessingOverlay: React.FC<{
 
   useEffect(() => {
     let cancelled = false;
-    const results: ProcessedResult[] = [];
+    const slots: ProcessedResult[] = new Array(products.length);
     const size: ImageSize = "1024x1024";
 
     const runProcess = async (
       file: File,
-      productName: string
-    ): Promise<{ afterUrl: string; afterBase64: string } | null> => {
+      productName: string,
+      dims?: BlueprintDims
+    ): Promise<{
+      afterUrl: string;
+      afterBase64: string;
+      blueprintLayout?: import("@/lib/blueprint-annotations").BlueprintLayout;
+    } | null> => {
       const form = new FormData();
       form.append("image", file);
       form.append("quality", quality);
-      form.append("size", size);
-      form.append("mode", "single");
-      form.append("preset", presetId);
       form.append("productName", productName);
-      form.append(
-        "removeBackground",
-        processingOptions.removeBackground ? "1" : "0"
-      );
-      form.append(
-        "keepProportion",
-        processingOptions.keepProportion ? "1" : "0"
-      );
-      form.append(
-        "preservePackUnits",
-        processingOptions.preservePackUnits !== false ? "1" : "0"
-      );
 
-      const res = await fetch("/api/process", {
+      if (dims) {
+        form.append("widthCm", String(dims.widthCm));
+        form.append("heightCm", String(dims.heightCm));
+        form.append("depthCm", String(dims.depthCm));
+      } else {
+        form.append("size", size);
+        form.append("mode", "single");
+        form.append("preset", presetId);
+        form.append(
+          "removeBackground",
+          processingOptions.removeBackground ? "1" : "0"
+        );
+        form.append(
+          "keepProportion",
+          processingOptions.keepProportion ? "1" : "0"
+        );
+        form.append(
+          "preservePackUnits",
+          processingOptions.preservePackUnits !== false ? "1" : "0"
+        );
+        if (processingOptions.recolorHex) {
+          form.append("recolorHex", processingOptions.recolorHex);
+          form.append("recolorLabel", processingOptions.recolorLabel || "");
+          form.append("recolorScope", processingOptions.recolorScope || "both");
+        }
+        if (processingOptions.emptyInterior) {
+          form.append("emptyInterior", "1");
+        }
+      }
+
+      const res = await fetch(dims ? "/api/blueprint" : "/api/process", {
         method: "POST",
         body: form,
       });
@@ -1873,87 +2069,115 @@ export const ProcessingOverlay: React.FC<{
       return parseProcessedImage(data);
     };
 
-    (async () => {
-      for (let i = 0; i < products.length; i++) {
-        if (cancelled) return;
-        const p = products[i];
-        setActiveName(p.name);
+    const processOne = async (p: AnyProduct): Promise<ProcessedResult> => {
+      const upload = isUploadedProduct(p);
+      const shopify = isShopifyProduct(p);
+      const customApi = isCustomApiProduct(p);
+      const storeBacked = shopify || customApi;
+      const dims = blueprintDimsByProduct?.[p.id];
 
-        const upload = isUploadedProduct(p);
-        const shopify = isShopifyProduct(p);
-        const customApi = isCustomApiProduct(p);
-        const storeBacked = shopify || customApi;
+      const beforeUrl = upload
+        ? p.fileUrl
+        : storeBacked
+          ? p.imageUrl
+          : buildImgUrl((p as Product).img, 600);
+      let afterUrl = beforeUrl;
+      let afterBase64: string | undefined;
+      let errorMsg: string | undefined;
+      let blueprintLayout: import("@/lib/blueprint-annotations").BlueprintLayout | undefined;
 
-        const beforeUrl = upload
-          ? p.fileUrl
-          : storeBacked
-            ? p.imageUrl
-            : buildImgUrl((p as Product).img, 600);
-        let afterUrl = beforeUrl;
-        let afterBase64: string | undefined;
-        let errorMsg: string | undefined;
-
-        try {
-          if (upload) {
-            setPhase("process");
-            const processed = await runProcess(p.file, p.name);
-            if (processed) {
-              afterBase64 = processed.afterBase64;
-              afterUrl = processed.afterUrl;
-            } else {
-              errorMsg = "המודל לא החזיר תמונה";
-            }
-          } else if (storeBacked) {
-            setPhase("download");
-            const safeName =
-              p.name.replace(/[^\w\u0590-\u05FF]+/g, "_").slice(0, 80) ||
-              "product";
-            const file = await urlToFile(p.imageUrl, `${safeName}.jpg`);
-            if (cancelled) return;
-            setPhase("process");
-            const processed = await runProcess(file, p.name);
-            if (processed) {
-              afterBase64 = processed.afterBase64;
-              afterUrl = processed.afterUrl;
-            } else {
-              errorMsg = "המודל לא החזיר תמונה";
-            }
-          } else {
-            setPhase("process");
-            await new Promise((r) => setTimeout(r, 700));
-          }
-        } catch (err) {
-          errorMsg = err instanceof Error ? err.message : "שגיאה לא ידועה";
-          console.error("process failed for", p.name, err);
+      try {
+        if (isBlueprint && !dims) {
+          throw new Error("חסרות מידות למוצר הזה");
         }
-
-        if (cancelled) return;
-        results.push({
-          productId: p.id,
-          beforeUrl,
-          afterUrl,
-          afterBase64,
-          name: p.name,
-          isReal: upload || storeBacked,
-          isShopify: shopify,
-          isCustomApi: customApi,
-          externalProductId: customApi ? p.externalId : undefined,
-          shopifyImageId: shopify ? p.imageId : undefined,
-          error: errorMsg,
-        });
-        setDoneIds((ids) => [...ids, p.id]);
-        setProgress(i + 1);
+        if (upload) {
+          setPhase("process");
+          const processed = await runProcess(p.file, p.name, dims);
+          if (processed) {
+            afterBase64 = processed.afterBase64;
+            afterUrl = processed.afterUrl;
+            blueprintLayout = processed.blueprintLayout;
+          } else {
+            errorMsg = "המודל לא החזיר תמונה";
+          }
+        } else if (storeBacked) {
+          setPhase("download");
+          const safeName =
+            p.name.replace(/[^\w\u0590-\u05FF]+/g, "_").slice(0, 80) ||
+            "product";
+          const file = await urlToFile(p.imageUrl, `${safeName}.jpg`);
+          if (cancelled) {
+            throw new Error("בוטל");
+          }
+          setPhase("process");
+          const processed = await runProcess(file, p.name, dims);
+          if (processed) {
+            afterBase64 = processed.afterBase64;
+            afterUrl = processed.afterUrl;
+            blueprintLayout = processed.blueprintLayout;
+          } else {
+            errorMsg = "המודל לא החזיר תמונה";
+          }
+        } else {
+          setPhase("process");
+          await new Promise((r) => setTimeout(r, 700));
+        }
+      } catch (err) {
+        errorMsg = err instanceof Error ? err.message : "שגיאה לא ידועה";
+        console.error("process failed for", p.name, err);
       }
+
+      return {
+        productId: p.id,
+        beforeUrl,
+        afterUrl,
+        afterBase64,
+        name: p.name,
+        isReal: upload || storeBacked,
+        isShopify: shopify,
+        isCustomApi: customApi,
+        externalProductId: customApi ? p.externalId : undefined,
+        shopifyImageId: shopify ? p.imageId : undefined,
+        error: errorMsg,
+        blueprintLayout,
+      };
+    };
+
+    (async () => {
+      const concurrency = useQueue ? BLUEPRINT_CONCURRENCY : 1;
+      await runPool(products, concurrency, async (p, i) => {
+        if (cancelled) return;
+        setActiveIds((ids) => (ids.includes(p.id) ? ids : [...ids, p.id]));
+        setActiveNames((names) =>
+          names.includes(p.name) ? names : [...names, p.name]
+        );
+        const result = await processOne(p);
+        if (cancelled) return;
+        slots[i] = result;
+        setActiveIds((ids) => ids.filter((id) => id !== p.id));
+        setActiveNames((names) => names.filter((n) => n !== p.name));
+        setDoneIds((ids) => [...ids, p.id]);
+        setProgress((n) => n + 1);
+      });
 
       if (cancelled) return;
       setPhase("done");
+      const results = slots.filter(Boolean);
       setTimeout(() => onDoneRef.current(results), 600);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [products, presetId, processingOptions, quality]);
+  }, [
+    products,
+    presetId,
+    processingOptions,
+    quality,
+    blueprintDimsByProduct,
+    isBlueprint,
+    useQueue,
+  ]);
 
   const pct = (progress / products.length) * 100;
 
@@ -1964,7 +2188,11 @@ export const ProcessingOverlay: React.FC<{
           className="eyebrow"
           style={{ marginBottom: 20, justifyContent: "center" }}
         >
-          שלב 03 / 03 · עיבוד AI
+          {isBlueprint
+            ? "שלב 03 / 03 · תור שרטוטים"
+            : isCatalogStyle
+              ? "שלב 03 / 03 · תור עיבוד"
+              : "שלב 03 / 03 · עיבוד AI"}
         </div>
 
         <div
@@ -2025,7 +2253,12 @@ export const ProcessingOverlay: React.FC<{
           </span>
         </h2>
         <p className="text-2" style={{ fontSize: 15, marginBottom: 36 }}>
-          סגנון {preset?.name} <span className="aster">·</span>{" "}
+          {isBlueprint
+            ? "שרטוט קווי מקצועי"
+            : isCatalogStyle
+              ? `סגנון ${preset?.name ?? "עיבוד"}`
+              : `סגנון ${preset?.name}`}{" "}
+          <span className="aster">·</span>{" "}
           <span className="mono">{products.length} תמונות</span>
         </p>
 
@@ -2045,9 +2278,19 @@ export const ProcessingOverlay: React.FC<{
             <span>
               {progress < products.length ? (
                 <>
-                  {phase === "download" ? "מוריד תמונה ·" : "מעבד AI ·"}{" "}
+                  {phase === "download"
+                    ? "מוריד תמונה ·"
+                    : isBlueprint
+                      ? "משרטט ·"
+                      : presetId === PRODUCT_RECOLOR_PRESET_ID
+                        ? "צובע ·"
+                        : presetId === EMPTY_INTERIOR_PRESET_ID
+                          ? "מרוקן ·"
+                          : isCatalogPro
+                            ? "מעצב קטלוג ·"
+                            : "מעבד AI ·"}{" "}
                   <strong style={{ color: "var(--ink)" }}>
-                    {activeName}
+                    {activeNames.join(" · ") || "מתחיל"}
                   </strong>
                 </>
               ) : (
@@ -2073,6 +2316,7 @@ export const ProcessingOverlay: React.FC<{
         >
           {products.map((p) => {
             const done = doneIds.includes(p.id);
+            const active = activeIds.includes(p.id);
             const upload = isUploadedProduct(p);
             const storeBacked = isStoreBackedProduct(p);
             const imgSrc = upload
@@ -2089,11 +2333,13 @@ export const ProcessingOverlay: React.FC<{
                   borderRadius: 6,
                   overflow: "hidden",
                   position: "relative",
-                  opacity: done ? 1 : 0.3,
+                  opacity: done || active ? 1 : 0.3,
                   transition: "all .3s",
                   border: done
                     ? "2px solid var(--cream)"
-                    : "1px solid var(--hair-2)",
+                    : active
+                      ? "2px solid rgba(176,64,224,.7)"
+                      : "1px solid var(--hair-2)",
                 }}
               >
                 <img
@@ -2140,7 +2386,20 @@ export const ResultsScreen: React.FC<{
   connection: StoreConnection | null;
   onPublish: (approvedIds: number[]) => void | Promise<void>;
   onBack: () => void;
-}> = ({ results, presetId, connection, onPublish, onBack }) => {
+  mode?: "studio" | "blueprint";
+  onLayoutChange?: (productId: number, layout: BlueprintLayout) => void;
+  onToast?: (msg: string) => void;
+}> = ({
+  results,
+  presetId,
+  connection,
+  onPublish,
+  onBack,
+  mode = "studio",
+  onLayoutChange,
+  onToast,
+}) => {
+  const isBlueprint = mode === "blueprint" || presetId === "blueprint";
   const platformLabel = connection
     ? getConnectionPlatformLabel(connection)
     : "החנות";
@@ -2166,14 +2425,79 @@ export const ResultsScreen: React.FC<{
   );
   const [publishing, setPublishing] = useState(false);
   const [viewerImage, setViewerImage] = useState<ViewerImage | null>(null);
+  const [layouts, setLayouts] = useState<Record<number, BlueprintLayout>>(() =>
+    Object.fromEntries(
+      results
+        .filter((r) => r.blueprintLayout)
+        .map((r) => [r.productId, r.blueprintLayout!])
+    )
+  );
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [uploadingIds, setUploadingIds] = useState<Set<number>>(new Set());
+  const [uploadedIds, setUploadedIds] = useState<Set<number>>(new Set());
+  const customApiConn =
+    connection?.platform === "custom-api" ? connection : null;
+
+  const canUploadDrawing = (r: ProcessedResult) =>
+    isBlueprint &&
+    !!customApiConn &&
+    r.isCustomApi &&
+    !!r.externalProductId &&
+    r.isReal &&
+    !r.error &&
+    !!r.afterUrl;
+
+  const uploadDrawing = async (r: ProcessedResult, silent?: boolean) => {
+    if (!customApiConn || !r.externalProductId || !r.afterUrl) return false;
+    setUploadingIds((prev) => new Set(prev).add(r.productId));
+    try {
+      await uploadFlattenedDrawing(customApiConn, {
+        productId: r.externalProductId,
+        imageUrl: r.afterUrl,
+        layout: layouts[r.productId],
+        filename: "drawing.png",
+      });
+      setUploadedIds((prev) => new Set(prev).add(r.productId));
+      if (!silent) onToast?.("השרטוט הועלה לאתר");
+      return true;
+    } catch (err) {
+      onToast?.(
+        err instanceof Error ? err.message : "העלאת השרטוט נכשלה"
+      );
+      return false;
+    } finally {
+      setUploadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(r.productId);
+        return next;
+      });
+    }
+  };
 
   const openViewer = (r: ProcessedResult) => {
     if (!r.isReal || r.error || !r.afterUrl) return;
+    if (isBlueprint && layouts[r.productId]) {
+      setEditingId(r.productId);
+      return;
+    }
     setViewerImage({
       originalUrl: r.beforeUrl,
       resultUrl: r.afterUrl,
       fileName: r.name,
     });
+  };
+
+  const downloadFlattened = async (r: ProcessedResult) => {
+    const layout = layouts[r.productId];
+    const href = layout
+      ? await flattenBlueprint(r.afterUrl, layout)
+      : r.afterUrl;
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}_blueprint.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const setView = (id: number, v: "before" | "after") =>
@@ -2208,12 +2532,16 @@ export const ResultsScreen: React.FC<{
     const reals = results.filter((r) => r.isReal);
     if (reals.length === 0) return;
     for (const r of reals) {
-      const a = document.createElement("a");
-      a.href = r.afterUrl;
-      a.download = `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      if (isBlueprint) {
+        await downloadFlattened(r);
+      } else {
+        const a = document.createElement("a");
+        a.href = r.afterUrl;
+        a.download = `${r.name.replace(/[^\w\u0590-\u05FF]+/g, "_")}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
       await new Promise((res) => setTimeout(res, 150));
     }
   };
@@ -2232,7 +2560,7 @@ export const ResultsScreen: React.FC<{
           onClick={onBack}
           style={{ marginBottom: 24, fontSize: 12 }}
         >
-          <II.ArrowRight size={14} /> חזור למוצרים
+          <II.ArrowRight size={14} /> {isBlueprint ? "חזור לשרטוט" : "חזור למוצרים"}
         </button>
         <div
           style={{
@@ -2248,13 +2576,27 @@ export const ResultsScreen: React.FC<{
               שלב 03 / 03 · תוצאות
             </div>
             <h1 className="h-display">
-              סגנון{" "}
-              <span
-                style={{ fontStyle: "italic", fontWeight: 500 }}
-                className="grad-text"
-              >
-                {preset?.name}
-              </span>
+              {isBlueprint ? (
+                <>
+                  שרטוט{" "}
+                  <span
+                    style={{ fontStyle: "italic", fontWeight: 500 }}
+                    className="grad-text"
+                  >
+                    מידות
+                  </span>
+                </>
+              ) : (
+                <>
+                  סגנון{" "}
+                  <span
+                    style={{ fontStyle: "italic", fontWeight: 500 }}
+                    className="grad-text"
+                  >
+                    {preset?.name}
+                  </span>
+                </>
+              )}
             </h1>
             <p className="text-2" style={{ marginTop: 14, fontSize: 14 }}>
               <span
@@ -2267,8 +2609,13 @@ export const ResultsScreen: React.FC<{
               >
                 {results.length}
               </span>{" "}
-              תמונות עובדו <span className="aster">·</span> בחר אילו לשלוח חזרה
-              לחנות
+              {isBlueprint
+                ? "שרטוטים מוכנים"
+                : "תמונות עובדו"}{" "}
+              <span className="aster">·</span>{" "}
+              {isBlueprint
+                ? "השווה לפני ואחרי והורד"
+                : "בחר אילו לשלוח חזרה לחנות"}
             </p>
           </div>
           <div
@@ -2308,7 +2655,7 @@ export const ResultsScreen: React.FC<{
           return (
             <div key={r.productId} className="result-card anim-up">
               <div
-                className={`result-img-wrap${r.isReal && !r.error ? " result-img-wrap--clickable" : ""}`}
+                className={`result-img-wrap${r.isReal && !r.error ? " result-img-wrap--clickable" : ""}${isBlueprint ? " result-img-wrap--checker" : ""}`}
                 role={r.isReal && !r.error ? "button" : undefined}
                 tabIndex={r.isReal && !r.error ? 0 : undefined}
                 title={
@@ -2327,14 +2674,25 @@ export const ResultsScreen: React.FC<{
                 <img
                   src={r.beforeUrl}
                   className={`result-img ${view === "after" ? "hidden" : ""}`}
-                  style={{ objectFit: "cover" }}
+                  style={{ objectFit: isBlueprint ? "contain" : "cover" }}
                 />
                 {r.isReal && !r.error ? (
+                  isBlueprint && layouts[r.productId] ? (
+                    <div
+                      className={`result-img ${view === "before" ? "hidden" : ""}`}
+                    >
+                      <BlueprintPreview
+                        imageUrl={r.afterUrl}
+                        layout={layouts[r.productId]}
+                      />
+                    </div>
+                  ) : (
                   <img
                     src={r.afterUrl}
                     className={`result-img ${view === "before" ? "hidden" : ""}`}
-                    style={{ objectFit: "cover", background: "#fff" }}
+                    style={{ objectFit: isBlueprint ? "contain" : "cover", background: isBlueprint ? "transparent" : "#fff" }}
                   />
+                  )
                 ) : r.error ? (
                   <div
                     className={`result-img ${view === "before" ? "hidden" : ""}`}
@@ -2458,6 +2816,51 @@ export const ResultsScreen: React.FC<{
                   >
                     <II.X size={13} />
                   </button>
+                  {isBlueprint && layouts[r.productId] && (
+                    <>
+                      <button
+                        className="icon-btn"
+                        title="ערוך מידות"
+                        onClick={() => setEditingId(r.productId)}
+                        style={{ width: 28, height: 28 }}
+                      >
+                        <II.Ruler size={13} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        title="הורד עם השינויים"
+                        onClick={() => void downloadFlattened(r)}
+                        style={{ width: 28, height: 28 }}
+                      >
+                        <II.Download size={13} />
+                      </button>
+                    </>
+                  )}
+                  {canUploadDrawing(r) && (
+                    <button
+                      className="icon-btn"
+                      title={
+                        uploadedIds.has(r.productId)
+                          ? "השרטוט הועלה לאתר"
+                          : "העלה שרטוט לאתר"
+                      }
+                      disabled={uploadingIds.has(r.productId)}
+                      onClick={() => void uploadDrawing(r)}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        color: uploadedIds.has(r.productId)
+                          ? "var(--ok)"
+                          : undefined,
+                      }}
+                    >
+                      {uploadingIds.has(r.productId) ? (
+                        <Spinner size={13} />
+                      ) : (
+                        <II.Upload size={13} />
+                      )}
+                    </button>
+                  )}
                   <button
                     className="icon-btn"
                     title="אשר"
@@ -2485,7 +2888,13 @@ export const ResultsScreen: React.FC<{
           </span>
           <div>
             <div style={{ fontSize: 14, fontWeight: 500 }}>
-              {approved > 0 ? "אושרו לפרסום" : "מוכנים לפרסום"}
+              {isBlueprint
+                ? approved > 0
+                  ? "מוכנים להורדה"
+                  : "שרטוטים מוכנים"
+                : approved > 0
+                  ? "אושרו לפרסום"
+                  : "מוכנים לפרסום"}
             </div>
             <div
               style={{
@@ -2495,7 +2904,7 @@ export const ResultsScreen: React.FC<{
                 textTransform: "uppercase",
               }}
             >
-              סגנון {preset?.name}
+              {isBlueprint ? "שרטוט מידות" : `סגנון ${preset?.name}`}
             </div>
           </div>
         </div>
@@ -2505,6 +2914,27 @@ export const ResultsScreen: React.FC<{
         <button className="btn btn-ghost" onClick={downloadAll}>
           <II.Download size={15} /> הורד הכל
         </button>
+        {isBlueprint &&
+          customApiConn &&
+          results.some((r) => canUploadDrawing(r) && statuses[r.productId] === "approved") && (
+            <button
+              className="btn btn-ghost"
+              disabled={publishing || uploadingIds.size > 0}
+              onClick={async () => {
+                const rows = results.filter(
+                  (r) =>
+                    statuses[r.productId] === "approved" && canUploadDrawing(r)
+                );
+                let ok = 0;
+                for (const r of rows) {
+                  if (await uploadDrawing(r, true)) ok += 1;
+                }
+                if (ok > 0) onToast?.(`${ok} שרטוטים הועלו לאתר`);
+              }}
+            >
+              <II.Upload size={15} /> העלה שרטוט לאתר
+            </button>
+          )}
         <button
           className="btn btn-primary lg"
           disabled={publishing || approved === 0}
@@ -2515,6 +2945,17 @@ export const ResultsScreen: React.FC<{
             if (approvedIds.length === 0) return;
             setPublishing(true);
             try {
+              if (isBlueprint) {
+                for (const r of results.filter(
+                  (row) =>
+                    approvedIds.includes(row.productId) &&
+                    row.isReal &&
+                    !row.error
+                )) {
+                  await downloadFlattened(r);
+                  await new Promise((res) => setTimeout(res, 120));
+                }
+              }
               await onPublish(approvedIds);
             } finally {
               setPublishing(false);
@@ -2528,9 +2969,13 @@ export const ResultsScreen: React.FC<{
         >
           {publishing ? (
             <>
-              <Spinner size={15} /> מפרסם…
+              <Spinner size={15} /> {isBlueprint ? "מוריד…" : "מפרסם…"}
             </>
-          ) : connection ? (
+          ) : isBlueprint || !connection ? (
+            <>
+              <II.Download size={15} /> הורד {approved} {isBlueprint ? "שרטוטים" : "תמונות"}
+            </>
+          ) : (
             <>
               {connection.platform === "shopify" ? (
                 <II.Shopify size={15} />
@@ -2538,10 +2983,6 @@ export const ResultsScreen: React.FC<{
                 <II.Globe size={15} />
               )}{" "}
               פרסם {approved} ל-{platformLabel}
-            </>
-          ) : (
-            <>
-              <II.Download size={15} /> הורד {approved} תמונות
             </>
           )}
         </button>
@@ -2552,6 +2993,22 @@ export const ResultsScreen: React.FC<{
         initialMode="compare"
         onClose={() => setViewerImage(null)}
       />
+      {editingId != null && layouts[editingId] && (
+        <BlueprintEditorModal
+          imageUrl={
+            results.find((r) => r.productId === editingId)?.afterUrl ?? ""
+          }
+          layout={layouts[editingId]}
+          productName={
+            results.find((r) => r.productId === editingId)?.name ?? ""
+          }
+          onClose={() => setEditingId(null)}
+          onSave={(next) => {
+            setLayouts((prev) => ({ ...prev, [editingId]: next }));
+            onLayoutChange?.(editingId, next);
+          }}
+        />
+      )}
     </>
   );
 };
@@ -2606,17 +3063,81 @@ export const HistoryScreen: React.FC<{
   storeProducts?: StoreBackedProduct[];
   onPublishComplete?: (publishedProductIds: Map<number, string>) => void;
   onToast?: (msg: string) => void;
+  onBlueprintLayoutSave?: (itemId: string, layout: BlueprintLayout) => void;
 }> = ({
   batches,
   connection = null,
   storeProducts = [],
   onPublishComplete,
   onToast,
+  onBlueprintLayoutSave,
 }) => {
   const [viewerImage, setViewerImage] = useState<ViewerImage | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [publishing, setPublishing] = useState(false);
   const [publishTick, setPublishTick] = useState(0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [uploadingDrawingIds, setUploadingDrawingIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [uploadedDrawingIds, setUploadedDrawingIds] = useState<Set<string>>(
+    new Set()
+  );
+
+  const customApiConn =
+    connection?.platform === "custom-api" ? connection : null;
+
+  const resolveDrawingProductId = (item: HistoryBatchItem) => {
+    if (item.externalProductId) return item.externalProductId;
+    const meta = getBatchItemMeta(item.id);
+    if (meta?.externalProductId) return meta.externalProductId;
+    if (item.beforeUrl) {
+      const normalized = item.beforeUrl.split("?")[0];
+      const matched = storeProducts.find(
+        (p) =>
+          isCustomApiProduct(p) && p.imageUrl.split("?")[0] === normalized
+      );
+      if (matched && isCustomApiProduct(matched)) return matched.externalId;
+    }
+    return undefined;
+  };
+
+  const canUploadHistoryDrawing = (batch: HistoryBatch, item: HistoryBatchItem) =>
+    !!customApiConn &&
+    batch.preset === "blueprint" &&
+    item.status === "success" &&
+    !!item.afterUrl &&
+    !!resolveDrawingProductId(item);
+
+  const uploadHistoryDrawing = async (item: HistoryBatchItem) => {
+    if (!customApiConn || !item.afterUrl) return;
+    const productId = resolveDrawingProductId(item);
+    if (!productId) {
+      onToast?.("לא נמצא מזהה מוצר להעלאת שרטוט");
+      return;
+    }
+    setUploadingDrawingIds((prev) => new Set(prev).add(item.id));
+    try {
+      await uploadFlattenedDrawing(customApiConn, {
+        productId,
+        imageUrl: item.afterUrl,
+        layout: item.blueprintLayout,
+        filename: "drawing.png",
+      });
+      setUploadedDrawingIds((prev) => new Set(prev).add(item.id));
+      onToast?.("השרטוט הועלה לאתר");
+    } catch (err) {
+      onToast?.(
+        err instanceof Error ? err.message : "העלאת השרטוט נכשלה"
+      );
+    } finally {
+      setUploadingDrawingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.id);
+        return next;
+      });
+    }
+  };
 
   const totalImages = useMemo(
     () =>
@@ -2720,7 +3241,36 @@ export const HistoryScreen: React.FC<{
     }
   };
 
-  const openItem = (item: HistoryBatchItem) => {
+  const editingItem = useMemo(() => {
+    if (!editingId) return null;
+    const direct = allItems.find((item) => item.id === editingId);
+    if (direct) return direct;
+    return (
+      allItems.find(
+        (item) =>
+          item.productId != null &&
+          editingId.endsWith(`-${item.productId}`) &&
+          !!item.blueprintLayout
+      ) ?? null
+    );
+  }, [allItems, editingId]);
+
+  useEffect(() => {
+    if (!editingId || !editingItem || editingItem.id === editingId) return;
+    setEditingId(editingItem.id);
+  }, [editingId, editingItem]);
+
+  const canEditBlueprint = (batch: HistoryBatch, item: HistoryBatchItem) =>
+    batch.preset === "blueprint" &&
+    item.status === "success" &&
+    !!item.afterUrl &&
+    !!item.blueprintLayout;
+
+  const openItem = (item: HistoryBatchItem, batch?: HistoryBatch) => {
+    if (batch && canEditBlueprint(batch, item)) {
+      setEditingId(item.id);
+      return;
+    }
     if (!item.afterUrl && !item.beforeUrl) return;
     setViewerImage({
       originalUrl: item.beforeUrl ?? item.afterUrl!,
@@ -3022,13 +3572,15 @@ export const HistoryScreen: React.FC<{
                               <button
                                 type="button"
                                 disabled={!clickable}
-                                onClick={() => openItem(item)}
+                                onClick={() => openItem(item, b)}
                                 title={
                                   item.error
                                     ? item.error
-                                    : clickable
-                                      ? "לחץ להגדלה והשוואה"
-                                      : undefined
+                                    : canEditBlueprint(b, item)
+                                      ? "לחץ לעריכת המידות"
+                                      : clickable
+                                        ? "לחץ להגדלה והשוואה"
+                                        : undefined
                                 }
                                 style={{
                                   display: "block",
@@ -3048,6 +3600,27 @@ export const HistoryScreen: React.FC<{
                                   }}
                                 />
                               </button>
+                              {canEditBlueprint(b, item) ? (
+                                <span
+                                  style={{
+                                    position: "absolute",
+                                    bottom: 8,
+                                    insetInlineStart: 8,
+                                    fontSize: 9,
+                                    fontWeight: 700,
+                                    letterSpacing: "0.08em",
+                                    background: "rgba(6,3,10,.78)",
+                                    color: "#fff",
+                                    padding: "4px 7px",
+                                    borderRadius: 6,
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 4,
+                                  }}
+                                >
+                                  <II.Ruler size={10} /> ערוך
+                                </span>
+                              ) : null}
                               {item.published ? (
                                 <span
                                   style={{
@@ -3096,17 +3669,49 @@ export const HistoryScreen: React.FC<{
                                 </button>
                               ) : null}
                             </div>
-                            <div
-                              style={{
-                                padding: "8px 10px",
-                                fontSize: 11,
-                                color: "var(--ink-2)",
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                            >
-                              {item.productName}
+                            <div style={{ padding: "8px 10px" }}>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "var(--ink-2)",
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                              >
+                                {item.productName}
+                              </div>
+                              {canUploadHistoryDrawing(b, item) ? (
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost"
+                                  disabled={uploadingDrawingIds.has(item.id)}
+                                  onClick={() => void uploadHistoryDrawing(item)}
+                                  style={{
+                                    width: "100%",
+                                    height: 32,
+                                    marginTop: 8,
+                                    fontSize: 11,
+                                    color: uploadedDrawingIds.has(item.id)
+                                      ? "var(--ok)"
+                                      : undefined,
+                                  }}
+                                >
+                                  {uploadingDrawingIds.has(item.id) ? (
+                                    <>
+                                      <Spinner size={12} /> מעלה…
+                                    </>
+                                  ) : uploadedDrawingIds.has(item.id) ? (
+                                    <>
+                                      <II.Check size={12} /> הועלה לאתר
+                                    </>
+                                  ) : (
+                                    <>
+                                      <II.Upload size={12} /> העלה שרטוט לאתר
+                                    </>
+                                  )}
+                                </button>
+                              ) : null}
                             </div>
                           </div>
                         );
@@ -3180,6 +3785,15 @@ export const HistoryScreen: React.FC<{
         initialMode="compare"
         onClose={() => setViewerImage(null)}
       />
+      {editingItem?.afterUrl && editingItem.blueprintLayout && (
+        <BlueprintEditorModal
+          imageUrl={editingItem.afterUrl}
+          layout={editingItem.blueprintLayout}
+          productName={editingItem.productName}
+          onClose={() => setEditingId(null)}
+          onSave={(next) => onBlueprintLayoutSave?.(editingItem.id, next)}
+        />
+      )}
     </>
   );
 };

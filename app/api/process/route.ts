@@ -68,6 +68,93 @@ UNIT COUNT / PACK / BUNDLE PRESERVATION (ABSOLUTELY CRITICAL — do this FIRST):
 - When the product is a multi-pack of identical items, photograph ALL of them together as a professional e-commerce pack shot: every unit fully visible, typically standing side-by-side (or a tight retail grouping), labels facing the camera, unified lighting, on pure white.
 - "Other products" / clutter to remove means unrelated background objects (furniture, rooms, people, random extras). Extra copies of THIS same product that form the pack are THE PRODUCT — keep them.`;
 
+const CATALOG_REBUILD_PROMPT = `You are a senior e-commerce catalog photographer and retoucher.
+
+Turn this source photo into a premium retail HERO SHOT of the SAME product on a perfectly clean, ABSOLUTELY PURE WHITE #FFFFFF studio background.
+
+This is NOT a light cleanup. Many source photos are amateur, cropped, messy, or incomplete. You must REDESIGN the photograph so the product looks like a real, complete, new unit shot in a professional studio — while remaining clearly the same product.
+
+IDENTITY (keep):
+- Same product category, brand, color, materials, distinctive design, handles, doors, and overall model language.
+- Do NOT swap it for a different model or a generic stock lookalike.
+- Preserve logos and branding that are clearly readable on the product body.
+- Do NOT render the product title or any extra marketing text in the image.
+
+RESTYLING (you MUST improve):
+- Professional soft studio lighting, sharp, photorealistic, 3D volume.
+- Clean dirt, tape, price stickers, ugly reflections, clutter, and kitchen/room mess around the product.
+- Center the complete product with generous pure-white margins (about 18-22% on every side). Soft short contact shadow under the base only.
+- The result must look like a real photograph, not an illustration, 3D toy, or AI collage.
+
+CROPPED / INCOMPLETE SOURCE (critical):
+- If the product is cut off, cropped, or only partly in frame, RECONSTRUCT the missing parts so the FULL product appears complete — top to bottom, side to side — as a real physical object standing on a studio floor.
+- Infer missing geometry from the visible parts and typical construction of this product type.
+- Example: a refrigerator cropped at the top or bottom must become a complete fridge — cabinet, doors, handles, kickplate, feet — not a sliced fragment.
+- Never leave a product looking chopped, floating as a fragment, or missing a side/top/base.
+
+MESSY INTERIORS (critical — fridges, freezers, ovens, dishwashers, cabinets, open wardrobes, display cases):
+- If doors/drawers are open and the interior looks messy, sparse, ugly, poorly lit, or unprofessional, RESTYLE that interior into a clean premium catalog look.
+- Example: a fridge whose inner products look bad — tidy the shelves, restyle contents neatly (or present a clean, tastefully stocked / clean empty interior that matches how this appliance is sold).
+- Do not leave chaotic leftover food, random clutter, dirty shelves, or ugly kitchen lighting inside.
+- If an open door looks accidental or broken, prefer a professional catalog pose: usually doors closed, unless a clean open interior clearly sells the product.
+
+APPLIANCES:
+- Must look like a brand-new sellable unit photographed in studio, not a snapshot from someone's kitchen.
+- Doors aligned, body complete, no cut-off top/bottom, no surrounding cabinets/walls/floors.
+
+STILL FORBIDDEN:
+- Extra props, people, rooms, floors, walls, gradients, sparkles, paint splashes.
+- Changing the product into a different SKU.
+- Collapsing a pack/bundle into one unit.
+
+Output: photorealistic 1:1 square catalog photo, sharp, high resolution, retail-ready, complete product, lots of clean PURE WHITE space around it.
+${LIGHT_PRODUCT_BLOCK}
+${COMPOSITION_BLOCK}
+${TEXT_FIDELITY_BLOCK}
+${UNIT_COUNT_BLOCK}`;
+
+function buildEmptyInteriorBlock(): string {
+  return `
+EMPTY INTERIOR / REMOVE CONTENTS (ABSOLUTELY CRITICAL — do this after identifying the product):
+- Remove ALL contents from the interior: food, bottles, jars, cans, leftovers, packaging, bags, condiments, and any loose products sitting on shelves or in door bins.
+- The result must show ONLY the appliance / cabinet itself — empty and clean, ready for a catalog shot of a new unit.
+- FIRST count every interior structure in the SOURCE image:
+  • glass / wire / plastic shelves
+  • crisper / freezer / vegetable drawers
+  • door bins / balconies / egg trays / bottle racks
+  • rails, supports, and shelf slots
+- The result MUST keep the EXACT SAME NUMBER of shelves, drawers, door bins, and racks. If the source has 4 refrigerator shelves + 2 crispers + 5 door bins, the empty result has 4 shelves + 2 crispers + 5 door bins.
+- Do NOT add extra shelves. Do NOT remove shelves. Do NOT invent a different interior layout or a generic "stock fridge" interior.
+- Keep shelf positions, spacing, materials (glass stays glass, wire stays wire), and support rails identical.
+- Empty door bins stay in place — just without products inside them.
+- Interior lighting should look clean and even. No leftover food ghosts, no floating items, no messy stains that look like leftover contents.
+- If doors are closed in the source and the interior is not visible, keep doors closed. If doors are open, keep them open and show the empty interior with the same shelf count.`;
+}
+
+function buildRecolorBlock(
+  hex: string,
+  label: string,
+  scope: "both" | "exterior" | "interior"
+): string {
+  const scopeText =
+    scope === "interior"
+      ? "Recolor ONLY the INTERIOR (inner walls, liners, door interiors). Leave the exterior body color as in the source."
+      : scope === "exterior"
+        ? "Recolor ONLY the EXTERIOR (cabinet, doors, sides, top). Leave the interior color as in the source."
+        : "Recolor BOTH the EXTERIOR and the INTERIOR — outside and inside must be this same color. Example: a fridge that should be black inside and outside: exterior doors/sides/top AND interior walls, door interiors, and colored liners all become this color.";
+
+  return `
+RECOLOR THE PRODUCT (ABSOLUTELY CRITICAL):
+- Paint the product this exact color: ${label} (${hex}).
+- ${scopeText}
+- This is a real material/paint change, not a color filter overlay. The product must look manufactured in this color.
+- Keep the same model, shape, handles, seams, logos, and proportions.
+- Metal handles, glass shelves, chrome trim, and transparent glass should stay those materials UNLESS they were body-colored plastic in the source. Glass refrigerator shelves stay clear/glass; only the cabinet/liner paint changes.
+- Show 3D lighting and soft shading so a black/white/colored body does not flatten into a silhouette.
+- Do not leave patches of the old color. No two-tone unless the source had a designed two-tone and the user scoped only one side.
+- Do not print the color name or hex code in the image.`;
+}
+
 const SINGLE_PROMPT = `Place the exact product shown in this photo on a perfectly clean, ABSOLUTELY PURE WHITE background.
 The background color MUST be #FFFFFF (255, 255, 255) — pure white, NOT off-white, NOT cream, NOT light gray, NOT beige, NOT any tint whatsoever. Think of a brand new sheet of bright white paper under perfect studio lighting.
 Keep the product itself 100% identical: do not change its shape, colors, materials, text, logos, labels, proportions, or any small detail.
@@ -415,6 +502,28 @@ export async function POST(req: NextRequest) {
     const preservePackUnits =
       (form.get("preservePackUnits") as string | null) !== "0";
     const productName = (form.get("productName") as string | null)?.trim() || "";
+    const preset = (form.get("preset") as string | null)?.trim() || "";
+    const recolorHexRaw = (form.get("recolorHex") as string | null)?.trim() || "";
+    const recolorLabel =
+      (form.get("recolorLabel") as string | null)?.trim() || "custom color";
+    const recolorScopeRaw =
+      (form.get("recolorScope") as string | null)?.trim() || "both";
+    const emptyInterior = (form.get("emptyInterior") as string | null) === "1";
+    const recolorHex = /^#?[0-9a-fA-F]{6}$/.test(recolorHexRaw)
+      ? recolorHexRaw.startsWith("#")
+        ? recolorHexRaw
+        : `#${recolorHexRaw}`
+      : "";
+    const recolorScope =
+      recolorScopeRaw === "exterior" || recolorScopeRaw === "interior"
+        ? recolorScopeRaw
+        : "both";
+    const isCatalogRebuild =
+      preset === "catalog-pro" ||
+      preset === "product-recolor" ||
+      preset === "empty-interior" ||
+      !!recolorHex ||
+      emptyInterior;
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -452,17 +561,21 @@ export async function POST(req: NextRequest) {
     if (isRefinement) {
       prompt = buildRefinementPrompt(refinementText!, hasMask);
     } else {
-      const basePrompt = mode === "group" ? GROUP_PROMPT : SINGLE_PROMPT;
+      const basePrompt = isCatalogRebuild
+        ? CATALOG_REBUILD_PROMPT
+        : mode === "group"
+          ? GROUP_PROMPT
+          : SINGLE_PROMPT;
       prompt =
         customPrompt && customPrompt.length > 5 ? customPrompt : basePrompt;
 
-      if (removeBackground) {
+      if (removeBackground || isCatalogRebuild) {
         prompt += `\n\n${BACKGROUND_REMOVAL_BLOCK}`;
       } else {
         prompt += `\n\n${LIGHT_TOUCH_BLOCK}`;
       }
 
-      if (keepProportion) {
+      if (keepProportion && !isCatalogRebuild) {
         prompt += `\n\n${KEEP_PROPORTION_BLOCK}`;
       }
 
@@ -475,6 +588,14 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      if (emptyInterior) {
+        prompt += `\n\n${buildEmptyInteriorBlock()}`;
+      }
+
+      if (recolorHex) {
+        prompt += `\n\n${buildRecolorBlock(recolorHex, recolorLabel, recolorScope)}`;
+      }
+
       if (productName) {
         prompt += `\n\n${productNameHint(productName)}`;
       }
@@ -484,6 +605,13 @@ export async function POST(req: NextRequest) {
       } else {
         // Repeat at the end — image models often drop unit-count from the middle of a long prompt.
         prompt += `\n\n${UNIT_COUNT_BLOCK}`;
+      }
+
+      if (emptyInterior) {
+        prompt += `\n\nREMINDER — EMPTY INTERIOR: no food or products inside. Keep the exact same shelf / drawer / door-bin count as the source.`;
+      }
+      if (recolorHex) {
+        prompt += `\n\nREMINDER — RECOLOR: the product must be ${recolorLabel} (${recolorHex}), scope: ${recolorScope}.`;
       }
     }
 
