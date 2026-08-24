@@ -1307,6 +1307,32 @@ body[data-density="spacious"] {
   color: #0a030f;
 }
 
+.product-fix-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.result-fix-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 3, 10, 0.46);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  gap: 10px;
+}
+@media (max-width: 720px) {
+  .product-fix-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ============================================================
    PROGRESS
    ============================================================ */

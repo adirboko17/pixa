@@ -64,6 +64,64 @@ export type Preset = {
 
 export type RecolorScope = "both" | "exterior" | "interior";
 
+export type InteriorLift = "lighten" | "darken";
+export type ShelfTrim = "black" | "white";
+
+export type ProductFixOptions = {
+  /** Relative interior brightness, or used together with a target hex. */
+  interiorLift?: InteriorLift;
+  /** Exact interior paint color. When set, overrides a relative lift. */
+  interiorLiftHex?: string;
+  /** Exact main-shelf count. Does not include drawers or door bins. */
+  shelfCount?: number;
+  /** Front fascia / trim strip on each shelf. */
+  shelfTrim?: ShelfTrim;
+  /** Soft under-shelf LED strip lighting on every main shelf. */
+  shelfLed?: boolean;
+};
+
+export const SHELF_TRIM_HEX: Record<ShelfTrim, string> = {
+  black: "#111111",
+  white: "#F3F3F3",
+};
+
+export function hasProductFix(fix: ProductFixOptions | undefined): boolean {
+  if (!fix) return false;
+  return !!(
+    fix.interiorLift ||
+    fix.interiorLiftHex ||
+    (typeof fix.shelfCount === "number" && fix.shelfCount > 0) ||
+    fix.shelfTrim ||
+    fix.shelfLed
+  );
+}
+
+export function pickProductFix(source: ProductFixOptions): ProductFixOptions {
+  const next: ProductFixOptions = {};
+  if (source.interiorLift) next.interiorLift = source.interiorLift;
+  if (source.interiorLiftHex) next.interiorLiftHex = source.interiorLiftHex;
+  if (typeof source.shelfCount === "number" && source.shelfCount > 0) {
+    next.shelfCount = source.shelfCount;
+  }
+  if (source.shelfTrim) next.shelfTrim = source.shelfTrim;
+  if (source.shelfLed) next.shelfLed = true;
+  return next;
+}
+
+export function appendProductFixToForm(
+  form: FormData,
+  fix: ProductFixOptions | undefined
+): void {
+  if (!hasProductFix(fix) || !fix) return;
+  if (fix.interiorLift) form.append("interiorLift", fix.interiorLift);
+  if (fix.interiorLiftHex) form.append("interiorLiftHex", fix.interiorLiftHex);
+  if (typeof fix.shelfCount === "number" && fix.shelfCount > 0) {
+    form.append("shelfCount", String(fix.shelfCount));
+  }
+  if (fix.shelfTrim) form.append("shelfTrim", fix.shelfTrim);
+  if (fix.shelfLed) form.append("shelfLed", "1");
+}
+
 export type ProcessingOptions = {
   presetId: string;
   removeBackground: boolean;
@@ -74,7 +132,7 @@ export type ProcessingOptions = {
   recolorLabel?: string;
   recolorScope?: RecolorScope;
   emptyInterior?: boolean;
-};
+} & ProductFixOptions;
 
 /** @deprecated Demo-only — not used in production screens. */
 export type Batch = {

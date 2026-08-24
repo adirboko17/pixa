@@ -755,6 +755,63 @@ export default function PixaApp() {
     [batchHistory]
   );
 
+  const updateResultImage = useCallback(
+    (productId: number, afterUrl: string, afterBase64: string) => {
+      setResults((prev) =>
+        prev.map((r) =>
+          r.productId === productId
+            ? { ...r, afterUrl, afterBase64, error: undefined }
+            : r
+        )
+      );
+      setBatchHistory((prev) =>
+        prev.map((batch) => {
+          let touched = false;
+          const items = batch.items?.map((item) => {
+            if (item.productId !== productId) return item;
+            touched = true;
+            return {
+              ...item,
+              afterUrl,
+              error: undefined,
+              status: "success" as const,
+            };
+          });
+          if (!touched) return batch;
+          return { ...batch, items, previewUrl: afterUrl };
+        })
+      );
+      const ids = new Set<string>();
+      for (const batch of batchHistory) {
+        for (const item of batch.items ?? []) {
+          if (item.productId === productId) ids.add(item.id);
+        }
+      }
+      for (const id of ids) {
+        void persistBlueprintAfterImage(id, afterUrl).then((stored) => {
+          if (!stored || stored === afterUrl) return;
+          setBatchHistory((prev) =>
+            prev.map((batch) => ({
+              ...batch,
+              previewUrl: batch.items?.some((item) => item.id === id)
+                ? stored
+                : batch.previewUrl,
+              items: batch.items?.map((item) =>
+                item.id === id ? { ...item, afterUrl: stored } : item
+              ),
+            }))
+          );
+          setResults((prev) =>
+            prev.map((r) =>
+              r.productId === productId ? { ...r, afterUrl: stored } : r
+            )
+          );
+        });
+      }
+    },
+    [batchHistory]
+  );
+
   const finishProcessing = useCallback((res: ProcessedResult[]) => {
     setResults(res);
     setShowProcessing(false);
@@ -835,23 +892,36 @@ export default function PixaApp() {
           setBatchHistory((prev) =>
             prev.map((b) => {
               if (b.id !== batchId) return b;
-              const layoutByPid = new Map(
+              const currentByPid = new Map(
                 (b.items ?? [])
-                  .filter((item) => item.productId != null && item.blueprintLayout)
-                  .map((item) => [item.productId!, item.blueprintLayout!])
+                  .filter((item) => item.productId != null)
+                  .map((item) => [item.productId!, item])
               );
               const merged = {
                 ...saved,
                 items: saved.items?.map((item) => {
-                  const newer =
+                  const current =
                     item.productId != null
-                      ? layoutByPid.get(item.productId)
+                      ? currentByPid.get(item.productId)
+                      : undefined;
+                  const newer = current?.blueprintLayout;
+                  const newerAfter =
+                    current?.afterUrl &&
+                    (current.afterUrl.startsWith("data:") ||
+                      current.afterUrl !== item.afterUrl)
+                      ? current.afterUrl
                       : undefined;
                   if (newer && newer !== item.blueprintLayout) {
                     void persistBlueprintLayout(item.id, newer);
-                    return { ...item, blueprintLayout: newer };
                   }
-                  return item;
+                  if (newerAfter?.startsWith("data:")) {
+                    void persistBlueprintAfterImage(item.id, newerAfter);
+                  }
+                  return {
+                    ...item,
+                    blueprintLayout: newer ?? item.blueprintLayout,
+                    afterUrl: newerAfter ?? item.afterUrl,
+                  };
                 }),
               };
               return merged;
@@ -1179,6 +1249,9 @@ export default function PixaApp() {
             }
             onLayoutChange={(productId, layout, imageUrl) =>
               applyBlueprintLayout({ productId }, layout, imageUrl)
+            }
+            onResultUpdate={(productId, update) =>
+              updateResultImage(productId, update.afterUrl, update.afterBase64)
             }
             onToast={pushToast}
             onBack={() => setRoute(resultsBack)}

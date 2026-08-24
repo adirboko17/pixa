@@ -22,7 +22,16 @@ import {
   type HistoryBatchItem,
   type ProcessingOptions,
   type RecolorScope,
+  type ProductFixOptions,
+  appendProductFixToForm,
+  pickProductFix,
 } from "./data";
+import {
+  ProductFixModal,
+  ProductFixSection,
+  runProductFix,
+  type ProductFixTarget,
+} from "./ProductFix";
 import type { StoreConnection } from "@/lib/store-connection";
 import {
   getConnectionLabel,
@@ -1553,6 +1562,7 @@ export const PresetPickerModal: React.FC<{
   const [recolorLabel, setRecolorLabel] = useState("שחור");
   const [recolorScope, setRecolorScope] = useState<RecolorScope>("both");
   const [emptyInterior, setEmptyInterior] = useState(false);
+  const [productFix, setProductFix] = useState<ProductFixOptions>({});
 
   const pickPreset = (id: string) => {
     setPicked(id);
@@ -1720,6 +1730,8 @@ export const PresetPickerModal: React.FC<{
             </div>
           )}
 
+          <ProductFixSection value={productFix} onChange={setProductFix} />
+
           <hr className="hr" style={{ margin: "18px 0" }} />
 
           <div>
@@ -1812,6 +1824,7 @@ export const PresetPickerModal: React.FC<{
                   ...(picked === PRODUCT_RECOLOR_PRESET_ID
                     ? { recolorHex, recolorLabel, recolorScope }
                     : {}),
+                  ...pickProductFix(productFix),
                 })
               }
               style={{ opacity: canStart ? 1 : 0.5 }}
@@ -2056,6 +2069,7 @@ export const ProcessingOverlay: React.FC<{
         if (processingOptions.emptyInterior) {
           form.append("emptyInterior", "1");
         }
+        appendProductFixToForm(form, processingOptions);
       }
 
       const res = await fetch(dims ? "/api/blueprint" : "/api/process", {
@@ -2393,6 +2407,10 @@ export const ResultsScreen: React.FC<{
     layout: BlueprintLayout,
     imageUrl?: string
   ) => void;
+  onResultUpdate?: (
+    productId: number,
+    update: { afterUrl: string; afterBase64: string }
+  ) => void;
   onToast?: (msg: string) => void;
 }> = ({
   results,
@@ -2402,6 +2420,7 @@ export const ResultsScreen: React.FC<{
   onBack,
   mode = "studio",
   onLayoutChange,
+  onResultUpdate,
   onToast,
 }) => {
   const isBlueprint = mode === "blueprint" || presetId === "blueprint";
@@ -2440,6 +2459,8 @@ export const ResultsScreen: React.FC<{
   const [editingId, setEditingId] = useState<number | null>(null);
   const [uploadingIds, setUploadingIds] = useState<Set<number>>(new Set());
   const [uploadedIds, setUploadedIds] = useState<Set<number>>(new Set());
+  const [fixTarget, setFixTarget] = useState<ProductFixTarget | null>(null);
+  const [fixingIds, setFixingIds] = useState<Set<number>>(new Set());
   const customApiConn =
     connection?.platform === "custom-api" ? connection : null;
 
@@ -2532,6 +2553,64 @@ export const ResultsScreen: React.FC<{
     (s) => s === "rejected"
   ).length;
   const pending = results.length - approved - rejected;
+
+  const extraFixCount = fixTarget
+    ? results.filter(
+        (r) =>
+          r.productId !== fixTarget.productId &&
+          r.isReal &&
+          !r.error &&
+          !!r.afterUrl &&
+          statuses[r.productId] === "approved"
+      ).length
+    : 0;
+
+  const applyProductFixToResults = async (
+    fix: ProductFixOptions,
+    applyToAll: boolean
+  ) => {
+    if (!fixTarget) return;
+    const primaryId = fixTarget.productId;
+    const targets = results.filter((r) => {
+      if (!r.isReal || r.error || !r.afterUrl) return false;
+      if (r.productId === primaryId) return true;
+      return applyToAll && statuses[r.productId] === "approved";
+    });
+    let primaryError: Error | null = null;
+    let ok = 0;
+    let failed = 0;
+    await runPool(targets, 1, async (r) => {
+      setFixingIds((prev) => new Set(prev).add(r.productId));
+      try {
+        const processed = await runProductFix({
+          beforeUrl: r.beforeUrl,
+          afterUrl: r.afterUrl,
+          name: r.name,
+          fix,
+          quality: "high",
+        });
+        onResultUpdate?.(r.productId, processed);
+        ok += 1;
+      } catch (err) {
+        failed += 1;
+        const error =
+          err instanceof Error ? err : new Error("התיקון נכשל");
+        if (r.productId === primaryId) primaryError = error;
+      } finally {
+        setFixingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(r.productId);
+          return next;
+        });
+      }
+    });
+    if (primaryError) throw primaryError;
+    if (failed > 0) {
+      onToast?.(`${ok} תוקנו, ${failed} נכשלו`);
+    } else {
+      onToast?.(ok > 1 ? `${ok} תמונות תוקנו` : "המוצר תוקן");
+    }
+  };
 
   const downloadAll = async () => {
     const reals = results.filter((r) => r.isReal);
@@ -2779,6 +2858,16 @@ export const ResultsScreen: React.FC<{
                   </button>
                 </div>
 
+                {fixingIds.has(r.productId) && (
+                  <div
+                    className="result-fix-overlay"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Spinner size={18} />
+                    מתקן מוצר…
+                  </div>
+                )}
+
                 {status !== "pending" && (
                   <div
                     onClick={(e) => e.stopPropagation()}
@@ -2882,6 +2971,37 @@ export const ResultsScreen: React.FC<{
                   </button>
                 </div>
               </div>
+                {!isBlueprint && r.isReal && !r.error && r.afterUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={fixingIds.has(r.productId)}
+                    onClick={() =>
+                      setFixTarget({
+                        productId: r.productId,
+                        name: r.name,
+                        beforeUrl: r.beforeUrl,
+                        afterUrl: r.afterUrl,
+                      })
+                    }
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      marginTop: 10,
+                      fontSize: 12,
+                    }}
+                  >
+                    {fixingIds.has(r.productId) ? (
+                      <>
+                        <Spinner size={14} /> מתקן…
+                      </>
+                    ) : (
+                      <>
+                        <II.Wand size={20} scale={1.2} /> תיקון מוצר
+                      </>
+                    )}
+                  </button>
+                )}
                 {canUploadDrawing(r) && (
                   <button
                     type="button"
@@ -3034,6 +3154,14 @@ export const ResultsScreen: React.FC<{
         </button>
       </BulkBar>
 
+      {fixTarget && (
+        <ProductFixModal
+          target={fixTarget}
+          extraCount={extraFixCount}
+          onClose={() => setFixTarget(null)}
+          onApply={applyProductFixToResults}
+        />
+      )}
       <ImageViewer
         image={viewerImage}
         initialMode="compare"

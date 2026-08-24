@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI, { toFile } from "openai";
 import sharp from "sharp";
 import { actualCostFromUsageUSD } from "@/lib/pricing";
+import { prepareShelfCountEdit } from "@/lib/shelf-count-edit";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -113,22 +114,232 @@ ${COMPOSITION_BLOCK}
 ${TEXT_FIDELITY_BLOCK}
 ${UNIT_COUNT_BLOCK}`;
 
-function buildEmptyInteriorBlock(): string {
+function buildEmptyInteriorBlock(shelfCount = 0): string {
+  const shelfRule =
+    shelfCount > 0
+      ? `- SHELF COUNT IS USER-SET: the empty interior MUST contain exactly ${shelfCount} main shelves. Ignore the shelf count in the source if it is different. Keep drawer and door-bin counts unchanged.`
+      : `- FIRST count every interior structure in the SOURCE image (shelves, drawers, door bins, rails).
+- The result MUST keep the EXACT SAME NUMBER of shelves, drawers, door bins, and racks.
+- Do NOT add extra shelves. Do NOT remove shelves. Do NOT invent a different interior layout.`;
+
   return `
 EMPTY INTERIOR / REMOVE CONTENTS (ABSOLUTELY CRITICAL — do this after identifying the product):
 - Remove ALL contents from the interior: food, bottles, jars, cans, leftovers, packaging, bags, condiments, and any loose products sitting on shelves or in door bins.
 - The result must show ONLY the appliance / cabinet itself — empty and clean, ready for a catalog shot of a new unit.
-- FIRST count every interior structure in the SOURCE image:
-  • glass / wire / plastic shelves
-  • crisper / freezer / vegetable drawers
-  • door bins / balconies / egg trays / bottle racks
-  • rails, supports, and shelf slots
-- The result MUST keep the EXACT SAME NUMBER of shelves, drawers, door bins, and racks. If the source has 4 refrigerator shelves + 2 crispers + 5 door bins, the empty result has 4 shelves + 2 crispers + 5 door bins.
-- Do NOT add extra shelves. Do NOT remove shelves. Do NOT invent a different interior layout or a generic "stock fridge" interior.
-- Keep shelf positions, spacing, materials (glass stays glass, wire stays wire), and support rails identical.
+${shelfRule}
+- Keep shelf materials (glass stays glass, wire stays wire) and support rails of this same product.
 - Empty door bins stay in place — just without products inside them.
 - Interior lighting should look clean and even. No leftover food ghosts, no floating items, no messy stains that look like leftover contents.
-- If doors are closed in the source and the interior is not visible, keep doors closed. If doors are open, keep them open and show the empty interior with the same shelf count.`;
+- If doors are closed in the source and the interior is not visible, keep doors closed. If doors are open, keep them open and show the empty interior.`;
+}
+
+function normalizeHex(raw: string): string {
+  const trimmed = raw.trim();
+  if (!/^#?[0-9a-fA-F]{6}$/.test(trimmed)) return "";
+  return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+}
+
+function buildInteriorLiftBlock(
+  lift: "lighten" | "darken" | "",
+  hex: string
+): string {
+  if (hex) {
+    return `
+INTERIOR COLOR CORRECTION (ABSOLUTELY CRITICAL):
+- Recolor ONLY the INTERIOR paint: inner cabinet walls, liner, and the inside faces of the doors.
+- Paint the interior this exact color: ${hex}.
+- This is a real material/paint change, not a color filter overlay.
+- Do NOT change the EXTERIOR body, sides, top, outer door faces, handles, logos, glass, chrome, or shelf materials.
+- Do NOT change the front fascia / trim strip on each shelf unless a separate shelf-trim instruction is given.
+- Show 3D lighting and soft shading so a dark/light interior does not flatten.
+- Do not leave patches of the old interior color. Do not print the hex code.`;
+  }
+
+  if (lift === "lighten") {
+    return `
+INTERIOR BRIGHTNESS CORRECTION (ABSOLUTELY CRITICAL):
+- Lighten ONLY the INTERIOR paint: inner cabinet walls, liner, and the inside faces of the doors.
+- Raise the interior by about one noticeable step. If it is near-black, make it a lighter charcoal black — still clearly black/dark, just not so deep that interior details disappear.
+- Keep the same color family (black stays black, white stays white). Do NOT shift hue toward blue, brown, or gray-beige.
+- Do NOT change the EXTERIOR body, sides, top, outer door faces, handles, logos, glass, chrome, or shelf materials.
+- Do NOT change the front fascia / trim strip on each shelf unless a separate shelf-trim instruction is given.
+- Lighting and 3D shading must remain photorealistic so the interior does not flatten.`;
+  }
+
+  return `
+INTERIOR BRIGHTNESS CORRECTION (ABSOLUTELY CRITICAL):
+- Darken ONLY the INTERIOR paint: inner cabinet walls, liner, and the inside faces of the doors.
+- Lower the interior by about one noticeable step. Keep the same color family. Do NOT shift hue.
+- Do NOT change the EXTERIOR body, sides, top, outer door faces, handles, logos, glass, chrome, or shelf materials.
+- Do NOT change the front fascia / trim strip on each shelf unless a separate shelf-trim instruction is given.
+- Lighting and 3D shading must remain photorealistic so the interior does not flatten.`;
+}
+
+function buildShelfCountBlock(count: number): string {
+  return `
+SHELF COUNT — USER OVERRIDE WINS (HIGHEST PRIORITY):
+- TARGET = exactly ${count} main shelves.
+- If the photo has MAGENTA / PINK horizontal guide lines on the glass, there are exactly ${count} of them. Each guide becomes one real shelf. Remove all magenta lines from the output.
+- Ignore the old shelf count in the photo. Follow the guides / the number ${count}.
+- A "shelf" = one removable horizontal rack on the side rails. Do NOT count the floor, ceiling, fan, drawers, or door bins.
+- SPACING (critical — this is the usual failure): the ${count} racks must be EVENLY spaced, like a real commercial display fridge.
+- The gap above the top rack, the gaps BETWEEN racks, and the gap below the bottom rack must all look similar. No giant empty hole between the last two racks.
+- FORBIDDEN: dropping the lowest rack onto the cabinet floor. FORBIDDEN: three racks clustered up top and one stuck at the bottom. The bottom rack floats on the side rails, well above the floor.
+- Copy this product's shelf style.
+- After editing, a person counting racks must get ${count}. No pink/magenta lines may remain.`;
+}
+
+function buildShelfLedBlock(combinedWithRebuild: boolean): string {
+  const scope = combinedWithRebuild
+    ? "- Apply this lighting to the NEW rebuilt shelves (the ones that match the magenta guides)."
+    : "- Apply this lighting to the existing shelves. Do not add or remove shelves.";
+  return `
+SHELF LIGHTING — HIDDEN WHITE LED (do this AFTER the shelf layout is correct):
+${scope}
+- Light each main shelf with a SMALL, SOFT, WHITE wash. The goal is illumination of the shelf, NOT a visible lamp.
+- Do NOT show the LED strip, bar, tube, neon line, glowing edge, or any light fixture. Hide the source completely under the front lip of the shelf.
+- PURE WHITE light only. No yellow, cream, amber, blue, RGB, or colored glow.
+- Each shelf should look gently brighter at the front. Subtle / בקטנה — not a light show.
+- FORBIDDEN: bright white lines across shelves, laser bars, CGI stripes, bloom, fog, lens flares, sparkles, light leaking onto the white background.
+- Photorealistic photograph, not a 3D render.
+- Do NOT add products onto the shelves.`;
+}
+
+function buildShelfTrimBlock(
+  trim: "black" | "white",
+  combinedWithRebuild: boolean
+): string {
+  const hex = trim === "white" ? "#F3F3F3" : "#111111";
+  const label = trim === "white" ? "white" : "black";
+  const scope = combinedWithRebuild
+    ? `- After the ${label} racks are placed, paint the front fascia / price-tag strip of EVERY new shelf ${label} (${hex}).`
+    : `- Recolor ONLY the thin front fascia / trim strip on the front edge of each existing shelf to ${label} (${hex}).`;
+  return `
+SHELF FRONT TRIM COLOR (do this AFTER the shelf layout is correct):
+${scope}
+- Apply the same trim color to every shelf front. Do NOT paint the shelf surface (wire stays wire, glass stays glass).
+- Do NOT change interior walls, drawers, door bins, handles, logos, or the exterior cabinet.`;
+}
+
+function buildProductFixBlocks(
+  args: {
+    interiorLift: "lighten" | "darken" | "";
+    interiorLiftHex: string;
+    shelfCount: number;
+    shelfTrim: "black" | "white" | "";
+    shelfLed: boolean;
+  },
+  opts?: { skipShelfCountBlock?: boolean }
+): string {
+  const combined = args.shelfCount > 0;
+  const parts: string[] = [];
+  if (args.interiorLift || args.interiorLiftHex) {
+    parts.push(buildInteriorLiftBlock(args.interiorLift, args.interiorLiftHex));
+  }
+  if (args.shelfCount > 0 && !opts?.skipShelfCountBlock) {
+    parts.push(buildShelfCountBlock(args.shelfCount));
+  }
+  if (args.shelfTrim) {
+    parts.push(buildShelfTrimBlock(args.shelfTrim, combined));
+  }
+  if (args.shelfLed) {
+    parts.push(buildShelfLedBlock(combined));
+  }
+  return parts.join("\n");
+}
+
+function buildShelfCountRefinementPrompt(
+  count: number,
+  otherBlocks: string,
+  extra?: string
+): string {
+  const extraBlock =
+    extra && extra.length > 2
+      ? `
+
+ADDITIONAL USER NOTE:
+"""
+${extra}
+"""`
+      : "";
+
+  return `You are editing ONE catalog product photo. Magenta/pink horizontal lines were painted on the glass interior as GUIDES.
+
+PRIMARY TASK — HIGHEST PRIORITY:
+There are exactly ${count} magenta guide lines. Turn EACH guide into one real shelf. Output exactly ${count} shelves.
+
+- Count the magenta lines. That count is ${count}. Produce the same number of real racks.
+- IGNORE the old shelf count in the photo (it may show 4 when the target is 5). Follow the guides, not the old racks.
+- Replace every magenta line with a real removable rack in this product's style (wire/glass/plastic). Mount them on the existing vertical tracks.
+- DELETE every magenta/pink guide from the output. No pink lines may remain.
+- SPACING (the usual failure — do not repeat it): place the ${count} racks in an EVEN rhythm from top to bottom. Same-looking gap above the top rack, between every pair, and below the bottom rack.
+- FORBIDDEN layout: lowest rack sitting on the floor, or a huge empty void between the third and fourth rack while the others are bunched higher up.
+- The bottom rack hangs on the side rails, clearly above the floor. The floor itself is not a shelf. The top fan is not a shelf.
+- Keep the same product, angle, framing, exterior, handles, logos, and pure white #FFFFFF background.
+- Empty interior: no food or products on the shelves.
+- A transparent mask marks the interior — rebuild shelves only inside that area. Do not change the door frame or exterior.
+- If extra finish instructions appear below (trim color, hidden lighting, interior paint), apply them ON these ${count} new shelves. Do all of it in one result. Do not skip the shelf-count rebuild to keep the old interior.
+
+${otherBlocks}${extraBlock}
+
+OUTPUT:
+- Photorealistic catalog photo of the SAME unit, now with exactly ${count} well-spaced shelves, plus any finish instructions above.
+- Do not print the number ${count} in the image.
+- No CGI neon light bars unless a lighting instruction is given. Do not skip the new shelf layout.
+${LIGHT_PRODUCT_BLOCK}
+${TEXT_FIDELITY_BLOCK}
+
+FINAL CHECK: count the racks — must be ${count}. Then check spacing — if the lowest rack is on the floor or one gap is much larger than the others, move the racks until the gaps match.`;
+}
+
+function buildProductFixRefinementPrompt(
+  blocks: string,
+  extra?: string,
+  shelfCount = 0
+): string {
+  const extraBlock =
+    extra && extra.length > 2
+      ? `
+
+ADDITIONAL USER NOTE (apply only if it does not contradict the structured corrections):
+"""
+${extra}
+"""`
+      : "";
+
+  const shelfPriority =
+    shelfCount > 0
+      ? `
+SHELF COUNT IS THE MAIN JOB:
+- The user typed ${shelfCount}. Both reference images may show a DIFFERENT shelf count — ignore that count.
+- Rebuild the interior racks so a viewer can clearly count exactly ${shelfCount} shelves.
+- Do not "preserve" the old shelf layout if the number is wrong.`
+      : "";
+
+  return `You are refining an EXISTING catalog product photo. Apply the structured product corrections below. You MAY rebuild the interior shelves when the user set a shelf count. Do not restyle or recolor anything else.
+
+You are receiving TWO reference images:
+
+- IMAGE 1 = ORIGINAL source product photo. Use it ONLY for identity: exact shape, materials, branding, and labels. Do NOT copy its shelf count if the user set a number.
+- IMAGE 2 = CURRENT catalog result that needs correction. Keep its composition, framing, white #FFFFFF background, empty interior, and every detail that is not mentioned below.
+${shelfPriority}
+
+STRUCTURED PRODUCT CORRECTIONS (apply these, and only these):
+${blocks}${extraBlock}
+
+OUTPUT REQUIREMENTS:
+- Same photo as IMAGE 2, with only the corrections above.
+- Background remains 100% pure white #FFFFFF.
+- Photorealistic, sharp, retail-ready, 1:1 square product photo.
+- Preserve the exact number of physical product units.
+- Do not print instructions, color names, or numbers in the image.
+${LIGHT_PRODUCT_BLOCK}
+${TEXT_FIDELITY_BLOCK}
+${UNIT_COUNT_BLOCK}${
+    shelfCount > 0
+      ? `\n\nFINAL CHECK — SHELVES: count the removable horizontal racks in your output. The number MUST be ${shelfCount}. If it is not ${shelfCount}, fix the interior before finishing.`
+      : ""
+  }`;
 }
 
 function buildRecolorBlock(
@@ -509,6 +720,35 @@ export async function POST(req: NextRequest) {
     const recolorScopeRaw =
       (form.get("recolorScope") as string | null)?.trim() || "both";
     const emptyInterior = (form.get("emptyInterior") as string | null) === "1";
+    const interiorLiftRaw =
+      (form.get("interiorLift") as string | null)?.trim() || "";
+    const interiorLift =
+      interiorLiftRaw === "lighten" || interiorLiftRaw === "darken"
+        ? interiorLiftRaw
+        : "";
+    const interiorLiftHex = normalizeHex(
+      (form.get("interiorLiftHex") as string | null) || ""
+    );
+    const shelfCountRaw = Number(form.get("shelfCount"));
+    const shelfCount =
+      Number.isInteger(shelfCountRaw) &&
+      shelfCountRaw >= 1 &&
+      shelfCountRaw <= 20
+        ? shelfCountRaw
+        : 0;
+    const shelfTrimRaw =
+      (form.get("shelfTrim") as string | null)?.trim() || "";
+    const shelfTrim =
+      shelfTrimRaw === "black" || shelfTrimRaw === "white"
+        ? shelfTrimRaw
+        : "";
+    const shelfLed = (form.get("shelfLed") as string | null) === "1";
+    const hasProductFix =
+      !!interiorLift ||
+      !!interiorLiftHex ||
+      shelfCount > 0 ||
+      !!shelfTrim ||
+      shelfLed;
     const recolorHex = /^#?[0-9a-fA-F]{6}$/.test(recolorHexRaw)
       ? recolorHexRaw.startsWith("#")
         ? recolorHexRaw
@@ -523,7 +763,8 @@ export async function POST(req: NextRequest) {
       preset === "product-recolor" ||
       preset === "empty-interior" ||
       !!recolorHex ||
-      emptyInterior;
+      emptyInterior ||
+      hasProductFix;
 
     if (!(file instanceof File)) {
       return NextResponse.json(
@@ -550,16 +791,43 @@ export async function POST(req: NextRequest) {
       type: pickMime(file.name || "input.png", file.type || "image/png"),
     });
 
-    // האם זה מצב תיקון? צריך גם טקסט תיקון וגם תמונת תוצאה קודמת
+    // האם זה מצב תיקון? צריך תמונת תוצאה קודמת + טקסט או תיקון מוצר מובנה
     const isRefinement =
-      !!refinementText &&
-      refinementText.length > 2 &&
-      previousResult instanceof File;
-    const hasMask = isRefinement && maskFile instanceof File;
+      previousResult instanceof File &&
+      ((!!refinementText && refinementText.length > 2) || hasProductFix);
+    const hasMask =
+      isRefinement && maskFile instanceof File && !hasProductFix;
+
+    const productFixArgs = {
+      interiorLift,
+      interiorLiftHex,
+      shelfCount,
+      shelfTrim,
+      shelfLed,
+    } as const;
+    const productFixBlocks = hasProductFix
+      ? buildProductFixBlocks(productFixArgs)
+      : "";
+    const shelfFinishBlocks = hasProductFix
+      ? buildProductFixBlocks(productFixArgs, { skipShelfCountBlock: true })
+      : "";
 
     let prompt: string;
     if (isRefinement) {
-      prompt = buildRefinementPrompt(refinementText!, hasMask);
+      prompt =
+        hasProductFix && shelfCount > 0
+          ? buildShelfCountRefinementPrompt(
+              shelfCount,
+              shelfFinishBlocks,
+              refinementText
+            )
+          : hasProductFix
+            ? buildProductFixRefinementPrompt(
+                productFixBlocks,
+                refinementText,
+                shelfCount
+              )
+            : buildRefinementPrompt(refinementText!, hasMask);
     } else {
       const basePrompt = isCatalogRebuild
         ? CATALOG_REBUILD_PROMPT
@@ -589,11 +857,20 @@ export async function POST(req: NextRequest) {
       }
 
       if (emptyInterior) {
-        prompt += `\n\n${buildEmptyInteriorBlock()}`;
+        prompt += `\n\n${buildEmptyInteriorBlock(shelfCount)}`;
       }
 
       if (recolorHex) {
         prompt += `\n\n${buildRecolorBlock(recolorHex, recolorLabel, recolorScope)}`;
+      }
+
+      if (hasProductFix) {
+        if (shelfCount > 0) {
+          prompt =
+            `USER SHELF COUNT OVERRIDE (do this FIRST, before any "keep the source interior" rule):\nThe source photo may show a different number of shelves. IGNORE that number. The result MUST have exactly ${shelfCount} main shelves.\n\n` +
+            prompt;
+        }
+        prompt += `\n\n${productFixBlocks}`;
       }
 
       if (productName) {
@@ -608,10 +885,21 @@ export async function POST(req: NextRequest) {
       }
 
       if (emptyInterior) {
-        prompt += `\n\nREMINDER — EMPTY INTERIOR: no food or products inside. Keep the exact same shelf / drawer / door-bin count as the source.`;
+        prompt += shelfCount
+          ? `\n\nREMINDER — EMPTY INTERIOR: no food or products inside. The cabinet MUST have exactly ${shelfCount} main shelves. Keep drawer and door-bin counts unchanged.`
+          : `\n\nREMINDER — EMPTY INTERIOR: no food or products inside. Keep the exact same shelf / drawer / door-bin count as the source.`;
       }
       if (recolorHex) {
         prompt += `\n\nREMINDER — RECOLOR: the product must be ${recolorLabel} (${recolorHex}), scope: ${recolorScope}.`;
+      }
+      if (hasProductFix) {
+        const bits: string[] = [];
+        if (interiorLiftHex) bits.push(`interior color ${interiorLiftHex}`);
+        else if (interiorLift) bits.push(`interior ${interiorLift}`);
+        if (shelfCount) bits.push(`exactly ${shelfCount} shelves`);
+        if (shelfTrim) bits.push(`shelf front trim ${shelfTrim}`);
+        if (shelfLed) bits.push("hidden white shelf wash, no visible LED strip");
+        prompt += `\n\nREMINDER — PRODUCT FIX: ${bits.join("; ")}. Change only these.`;
       }
     }
 
@@ -626,18 +914,44 @@ export async function POST(req: NextRequest) {
     >[] = uploaded;
     let maskUploaded: Awaited<ReturnType<typeof toFile>> | undefined;
 
+    let prevBuffer: Buffer | undefined;
     if (isRefinement && previousResult instanceof File) {
-      const prevBuffer = Buffer.from(await previousResult.arrayBuffer());
+      prevBuffer = Buffer.from(await previousResult.arrayBuffer());
       const prevFile = await toFile(prevBuffer, "previous_result.png", {
         type: pickMime(previousResult.name || "previous_result.png", "image/png"),
       });
-      imageInput = hasMask ? [prevFile, uploaded] : [uploaded, prevFile];
+      imageInput =
+        shelfCount > 0 && !hasMask
+          ? prevFile
+          : hasMask
+            ? [prevFile, uploaded]
+            : [uploaded, prevFile];
     }
     if (hasMask && maskFile instanceof File) {
       const maskBuffer = Buffer.from(await maskFile.arrayBuffer());
       maskUploaded = await toFile(maskBuffer, "mask.png", {
         type: "image/png",
       });
+    }
+
+    if (shelfCount > 0 && !hasMask) {
+      try {
+        const prep = await prepareShelfCountEdit(
+          prevBuffer ?? buffer,
+          shelfCount
+        );
+        imageInput = await toFile(prep.image, "shelf-guides.png", {
+          type: "image/png",
+        });
+        maskUploaded = await toFile(prep.mask, "shelf-mask.png", {
+          type: "image/png",
+        });
+        console.info(
+          `[/api/process] shelf-count prep: target=${shelfCount} ${prep.width}x${prep.height}`
+        );
+      } catch (err) {
+        console.warn("[/api/process] shelf-count prep failed, using photo only", err);
+      }
     }
 
     // משתמשים ב-gpt-image-2 (המודל החדש מאפריל 2026):

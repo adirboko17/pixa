@@ -15,7 +15,13 @@ import {
   parseDimensionsFromText,
   type ProductDimensions,
 } from "@/lib/product-dimensions";
-import type { ProcessingOptions, RecolorScope } from "./data";
+import {
+  pickProductFix,
+  type ProcessingOptions,
+  type ProductFixOptions,
+  type RecolorScope,
+} from "./data";
+import { ProductFixSection } from "./ProductFix";
 
 const COLOR_SWATCHES = [
   { id: "black", label: "שחור", hex: "#111111" },
@@ -139,6 +145,7 @@ export const BlueprintScreen: React.FC<{
   const [recolorHex, setRecolorHex] = useState("#111111");
   const [recolorLabel, setRecolorLabel] = useState("שחור");
   const [recolorScope, setRecolorScope] = useState<RecolorScope>("both");
+  const [productFix, setProductFix] = useState<ProductFixOptions>({});
   const [emptyWithColor, setEmptyWithColor] = useState(false);
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -288,6 +295,7 @@ export const BlueprintScreen: React.FC<{
       recolorLabel,
       recolorScope,
       emptyInterior: emptyWithColor,
+      ...pickProductFix(productFix),
     });
   };
 
@@ -860,6 +868,7 @@ export const BlueprintScreen: React.FC<{
                 />
               </span>
             </button>
+            <ProductFixSection value={productFix} onChange={setProductFix} />
           </div>
         </section>
       ) : (
