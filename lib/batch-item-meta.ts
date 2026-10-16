@@ -95,7 +95,6 @@ export function saveBatchItemMeta(itemId: string, meta: BatchItemMeta): void {
   }
   const map = readMetaMap();
   map[itemId] = stripLayout({
-    sourceType: meta.sourceType,
     ...map[itemId],
     ...meta,
   });
@@ -107,8 +106,8 @@ export function getBatchItemMeta(itemId: string): BatchItemMeta | null {
   const layout = memoryLayouts.get(itemId) ?? stored?.blueprintLayout;
   if (!stored && layout === undefined) return null;
   return {
-    sourceType: stored?.sourceType ?? "upload",
     ...stored,
+    sourceType: stored?.sourceType ?? "upload",
     ...(layout !== undefined ? { blueprintLayout: layout } : {}),
   };
 }

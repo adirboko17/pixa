@@ -253,9 +253,10 @@ export async function POST(req: NextRequest) {
       size: "1024x1024",
       quality: qualityRaw === "auto" ? "auto" : qualityRaw,
       background: "opaque",
-      output_format: "png",
       n: 1,
-    });
+      // Newer image models accept this; the installed SDK types do not list it yet.
+      output_format: "png",
+    } as OpenAI.Images.ImageEditParams);
 
     const b64 = result.data?.[0]?.b64_json;
     if (!b64) {
@@ -265,9 +266,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let pngBuffer = Buffer.from(b64, "base64");
+    let pngBuffer = Buffer.from(b64, "base64") as Buffer;
     try {
-      pngBuffer = await knockoutWhiteBackground(pngBuffer);
+      pngBuffer = (await knockoutWhiteBackground(pngBuffer)) as Buffer;
     } catch (e) {
       console.warn("[/api/blueprint] alpha knockout failed, returning opaque:", e);
     }
@@ -278,7 +279,7 @@ export async function POST(req: NextRequest) {
         heightCm,
         depthCm,
       });
-      pngBuffer = prepared.png;
+      pngBuffer = prepared.png as Buffer;
       layout = prepared.layout;
     } catch (e) {
       console.warn("[/api/blueprint] dimension layout failed:", e);
