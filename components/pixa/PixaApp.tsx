@@ -76,11 +76,25 @@ import {
 } from "@/lib/batch-history";
 import { markItemPublished } from "@/lib/publish-tracker";
 import { isLegacyBatchProductName } from "@/lib/product-name-resolver";
+import type { ScannedImport } from "./SiteCatalogScan";
 
 type Stage = "login" | "register" | "onboarding" | "connect" | "app";
 type AppRoute = NavId | "results";
 
 let uploadIdSeed = 1_000_000;
+
+function skipStoreConnectKey(userId: string) {
+  return `photospro:skip-store-connect:${userId}`;
+}
+
+function skippedStoreConnect(userId: string | undefined): boolean {
+  if (!userId || typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(skipStoreConnectKey(userId)) === "1";
+  } catch {
+    return false;
+  }
+}
 
 function mapShopifyToProducts(
   shopify: ShopifyProduct[]
@@ -334,8 +348,12 @@ export default function PixaApp() {
       return "app";
     }
     if (!hasBrandAvatar) return "onboarding";
-    if (!connection) return "connect";
-    return "app";
+    // Explicit visit from settings still opens the connect screen.
+    if (stage === "connect") return "connect";
+    if (connection || stage === "app" || skippedStoreConnect(session.user.id)) {
+      return "app";
+    }
+    return "connect";
   }, [session, stage, hasBrandAvatar, connectionLoaded, connection]);
 
   /* ---------- Decide stage once we know auth + brand-avatar status ---------- */
@@ -347,7 +365,8 @@ export default function PixaApp() {
       // Don't yank users out of the active app once they're in.
       if (curr === "app") return "app";
       if (!hasBrandAvatar) return "onboarding";
-      return connection ? "app" : "connect";
+      if (connection || skippedStoreConnect(session.user.id)) return "app";
+      return "connect";
     });
     if (connection && hasBrandAvatar) setRoute("dashboard");
   }, [session, hasBrandAvatar, connection, connectionLoaded]);
@@ -506,6 +525,13 @@ export default function PixaApp() {
    * until they decide to connect from settings later on.
    */
   const handleSkipConnect = () => {
+    if (session?.user?.id) {
+      try {
+        window.localStorage.setItem(skipStoreConnectKey(session.user.id), "1");
+      } catch {
+        // The in-memory stage still lets them through this visit.
+      }
+    }
     setStage("app");
     setRoute("dashboard");
     pushToast("דילגת על חיבור החנות. אפשר לחבר מאוחר יותר מההגדרות.");
@@ -568,6 +594,66 @@ export default function PixaApp() {
     setSelectedIds((prev) => [...newOnes.map((n) => n.id), ...prev]);
     setRoute("products");
     pushToast(`${newOnes.length} תמונות נוספו · בחר סגנון ולחץ עצב`);
+  };
+
+  const handleImportScanned = (items: ScannedImport[]) => {
+    const capped = items.slice(0, MAX_BATCH_SELECT);
+    const newOnes: UploadedProduct[] = capped.map((item) => {
+      const id = uploadIdSeed++;
+      return {
+        id,
+        name: item.name,
+        price: item.price,
+        currency: item.currency,
+        category: "all",
+        img: "",
+        optimized: false,
+        isUpload: true,
+        fileUrl: URL.createObjectURL(item.file),
+        file: item.file,
+        gallery: item.images,
+        activeSrc: item.activeSrc,
+        createdAt: Date.now(),
+      };
+    });
+    setUploads((prev) => [...newOnes, ...prev]);
+    setRoute("products");
+    setSelectedIds([]);
+    pushToast(
+      items.length > capped.length
+        ? `נמשכו ${capped.length} מוצרים מתוך ${items.length}. עכשיו אפשר לבחור מה לעשות עם התמונות.`
+        : `${newOnes.length} מוצרים נמשכו לקטלוג. עכשיו אפשר לבחור מה לעשות עם התמונות.`
+    );
+  };
+
+  const handlePickGalleryImage = async (productId: number, src: string) => {
+    const current = uploads.find((item) => item.id === productId);
+    if (!current || current.activeSrc === src) return;
+    try {
+      const res = await fetch("/api/fetch-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: src }),
+      });
+      if (!res.ok) {
+        pushToast("לא הצלחנו לטעון את התמונה");
+        return;
+      }
+      const blob = await res.blob();
+      const file = new File([blob], `${current.name}.jpg`, {
+        type: blob.type || "image/jpeg",
+      });
+      const fileUrl = URL.createObjectURL(file);
+      setUploads((prev) =>
+        prev.map((item) => {
+          if (item.id !== productId) return item;
+          URL.revokeObjectURL(item.fileUrl);
+          return { ...item, file, fileUrl, activeSrc: src };
+        })
+      );
+    } catch {
+      pushToast("לא הצלחנו לטעון את התמונה");
+    }
   };
 
   /* ---------- Catalog ---------- */
@@ -1166,6 +1252,8 @@ export default function PixaApp() {
             onStartBatch={startBatch}
             uploads={uploads}
             onAddUploads={handleAddUploads}
+            onImportScanned={handleImportScanned}
+            onPickGalleryImage={handlePickGalleryImage}
             connection={connection}
             shopifyProducts={shopifyProducts}
             shopifyCategories={shopifyCategories}

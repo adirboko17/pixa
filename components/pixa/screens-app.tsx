@@ -57,6 +57,9 @@ import {
   publishHistoryItems,
 } from "@/lib/publish-to-store";
 import ImageViewer, { type ViewerImage } from "@/components/ImageViewer";
+import SiteCatalogScan, {
+  type ScannedImport,
+} from "./SiteCatalogScan";
 import {
   isLegacyBatchProductName,
   lookupAfterProductMap,
@@ -65,6 +68,17 @@ import {
 const II = Icons;
 
 export const MAX_BATCH_SELECT = 100;
+
+function formatCatalogPrice(p: { price: number; currency?: string }) {
+  if (!p.price) return "—";
+  const n = p.price.toLocaleString("he-IL", { maximumFractionDigits: 2 });
+  const cur = (p.currency || "ILS").toUpperCase();
+  if (cur === "ILS" || cur === "NIS") return `₪${n}`;
+  if (cur === "USD") return `$${n}`;
+  if (cur === "EUR") return `€${n}`;
+  if (cur === "GBP") return `£${n}`;
+  return `${n} ${cur}`;
+}
 
 /* ============================================================
    SHARED: Sparkline (tiny inline chart)
@@ -987,6 +1001,8 @@ export type UploadedProduct = Product & {
   isUpload: true;
   fileUrl: string;
   file: File;
+  gallery?: Array<{ src: string; primary: boolean; position: number }>;
+  activeSrc?: string;
 };
 
 export type AnyProduct =
@@ -1014,6 +1030,8 @@ export const ProductsScreen: React.FC<{
   onStartBatch: (ids: number[]) => void;
   uploads: UploadedProduct[];
   onAddUploads: (files: File[]) => void;
+  onImportScanned: (items: ScannedImport[]) => void;
+  onPickGalleryImage?: (productId: number, src: string) => void;
   /** Real store products. Empty when not connected or still loading. */
   shopifyProducts: StoreBackedProduct[];
   /** Real Shopify collections (used as category chips). */
@@ -1039,6 +1057,8 @@ export const ProductsScreen: React.FC<{
   onStartBatch,
   uploads,
   onAddUploads,
+  onImportScanned,
+  onPickGalleryImage,
   shopifyProducts,
   shopifyCategories,
   shopifyCatalogTotal = 0,
@@ -1057,6 +1077,7 @@ export const ProductsScreen: React.FC<{
   >("all");
   const [search, setSearch] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [scanOpen, setScanOpen] = useState(false);
 
   const handleCategory = (catId: string) => {
     setCategory(catId);
@@ -1208,6 +1229,12 @@ export const ProductsScreen: React.FC<{
                 if (fileInputRef.current) fileInputRef.current.value = "";
               }}
             />
+            <button
+              className="btn btn-ghost"
+              onClick={() => setScanOpen(true)}
+            >
+              <II.Globe size={15} /> סרוק אתר
+            </button>
             <button
               className="btn btn-ghost"
               onClick={() => fileInputRef.current?.click()}
@@ -1439,6 +1466,37 @@ export const ProductsScreen: React.FC<{
                   <div className="product-check">
                     {isSelected && <II.Check size={12} strokeWidth={3} />}
                   </div>
+                  {upload && p.gallery && p.gallery.length > 1 && (
+                    <div
+                      className="gallery-strip"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {p.gallery.map((img) => {
+                        const active = (p.activeSrc || p.gallery?.[0]?.src) === img.src;
+                        return (
+                          <button
+                            key={img.src}
+                            type="button"
+                            className={active ? "on" : ""}
+                            title={active ? "התמונה שתישלח לעיצוב" : "סמן כתמונה לעיצוב"}
+                            onClick={() => onPickGalleryImage?.(p.id, img.src)}
+                          >
+                            <img
+                              src={img.src}
+                              alt=""
+                              onError={(e) => {
+                                const el = e.currentTarget;
+                                if (!el.src.includes("/api/fetch-image")) {
+                                  el.src = `/api/fetch-image?url=${encodeURIComponent(img.src)}`;
+                                }
+                              }}
+                            />
+                            {active && <span className="pick-label">לעיצוב</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
                 <span className="corner-marks">
                   <span />
@@ -1448,17 +1506,24 @@ export const ProductsScreen: React.FC<{
                 </span>
                 <div className="product-info">
                   <div className="product-name">{p.name}</div>
-                  <div className="product-price">
-                    {upload || (storeBacked && !p.price)
-                      ? "—"
-                      : `₪${p.price.toLocaleString("he-IL")}`}
-                  </div>
+                  <div className="product-price">{formatCatalogPrice(p)}</div>
+                  {upload && p.gallery && p.gallery.length > 1 && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
+                      סמן איזו תמונה תישלח לעיצוב
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
+      <SiteCatalogScan
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onImport={onImportScanned}
+      />
 
       {selectedIds.length > 0 && !hideBulkBar && (
         <BulkBar>
@@ -1472,6 +1537,16 @@ export const ProductsScreen: React.FC<{
               >
                 מוצרים נבחרו
               </div>
+              {allProducts.some(
+                (p) =>
+                  selectedIds.includes(p.id) &&
+                  isUploadedProduct(p) &&
+                  (p.gallery?.length || 0) > 1
+              ) && (
+                <div style={{ fontSize: 11, color: "var(--ink-3)", marginTop: 2 }}>
+                  תעוצב התמונה שסימנת בכל מוצר
+                </div>
+              )}
             </div>
           </div>
           <div

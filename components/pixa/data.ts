@@ -20,6 +20,8 @@ export type Product = {
   createdAt?: number;
   /** Optional physical size in cm, from store data or parsed from the title. */
   dimensions?: ProductDimensions;
+  /** ISO currency for a price that came from a scanned catalog. */
+  currency?: string;
 };
 
 /**

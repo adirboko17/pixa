@@ -6,9 +6,23 @@ export const maxDuration = 60;
 const UA =
   "Mozilla/5.0 (compatible; PhotosProBot/1.0; +https://photospro.local) Chrome/120 Safari/537.36";
 
+export async function GET(req: NextRequest) {
+  const url = req.nextUrl.searchParams.get("url") || "";
+  return fetchRemoteImage(url);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { url } = (await req.json()) as { url?: string };
+    return fetchRemoteImage(url);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "שגיאה לא ידועה";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function fetchRemoteImage(url?: string) {
+  try {
     if (!url) {
       return NextResponse.json({ error: "חסר url" }, { status: 400 });
     }
@@ -16,6 +30,9 @@ export async function POST(req: NextRequest) {
     try {
       parsed = new URL(url);
     } catch {
+      return NextResponse.json({ error: "url לא תקין" }, { status: 400 });
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return NextResponse.json({ error: "url לא תקין" }, { status: 400 });
     }
 
