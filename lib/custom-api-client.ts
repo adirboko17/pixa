@@ -69,6 +69,27 @@ export async function uploadCustomApiProductImage(
   });
 }
 
+export async function updateCustomApiProductByName(
+  conn: CustomApiStoreConnection,
+  args: {
+    title: string;
+    price?: number;
+    currency?: string;
+    imageBase64?: string;
+    images?: Array<{ imageBase64: string; position: number; primary: boolean }>;
+  }
+): Promise<{ success: true; id: string; title: string; imageUrl?: string }> {
+  return postJson("/api/custom-api/update-by-name", {
+    apiUrl: conn.apiUrl,
+    apiKey: conn.apiKey,
+    title: args.title,
+    price: args.price,
+    currency: args.currency,
+    imageBase64: args.imageBase64,
+    images: args.images ?? [],
+  });
+}
+
 export async function uploadCustomApiProductDrawing(
   conn: CustomApiStoreConnection,
   args: {

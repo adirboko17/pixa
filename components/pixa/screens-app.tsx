@@ -1032,6 +1032,8 @@ export const ProductsScreen: React.FC<{
   onAddUploads: (files: File[]) => void;
   onImportScanned: (items: ScannedImport[]) => void;
   onPickGalleryImage?: (productId: number, src: string) => void;
+  onPushToCms?: (ids: number[]) => void;
+  pushingToCms?: boolean;
   /** Real store products. Empty when not connected or still loading. */
   shopifyProducts: StoreBackedProduct[];
   /** Real Shopify collections (used as category chips). */
@@ -1059,6 +1061,8 @@ export const ProductsScreen: React.FC<{
   onAddUploads,
   onImportScanned,
   onPickGalleryImage,
+  onPushToCms,
+  pushingToCms = false,
   shopifyProducts,
   shopifyCategories,
   shopifyCatalogTotal = 0,
@@ -1566,6 +1570,16 @@ export const ProductsScreen: React.FC<{
           <button className="btn btn-ghost" onClick={clearAll}>
             נקה
           </button>
+          {onPushToCms &&
+            selectedIds.some((id) => uploads.some((u) => u.id === id)) && (
+              <button
+                className="btn btn-ghost"
+                disabled={pushingToCms}
+                onClick={() => onPushToCms(selectedIds)}
+              >
+                {pushingToCms ? "מעדכן באתר…" : "עדכן באתר"}
+              </button>
+            )}
           <button
             className="btn btn-primary lg"
             onClick={() => onStartBatch(selectedIds)}

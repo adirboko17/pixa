@@ -52,6 +52,7 @@ import {
   listCustomApiProducts,
   stableProductId,
   uploadCustomApiProductImage,
+  updateCustomApiProductByName,
   type CustomApiProduct,
 } from "@/lib/custom-api-client";
 import {
@@ -162,6 +163,7 @@ export default function PixaApp() {
   const [route, setRoute] = useState<AppRoute>("dashboard");
   const [connection, setConnection] = useState<StoreConnection | null>(null);
   const [connectionLoaded, setConnectionLoaded] = useState(false);
+  const [pushingToCms, setPushingToCms] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -654,6 +656,84 @@ export default function PixaApp() {
     } catch {
       pushToast("לא הצלחנו לטעון את התמונה");
     }
+  };
+
+  const handlePushToCms = async (ids: number[]) => {
+    if (connection?.platform !== "custom-api") {
+      pushToast("חבר קודם את אתר ה-CMS במסך החיבור, עם כתובת ה-API והמפתח");
+      setStage("connect");
+      return;
+    }
+    const chosen = uploads.filter((item) => ids.includes(item.id));
+    if (chosen.length === 0) {
+      pushToast("בחר מוצרים שנמשכו מהסריקה");
+      return;
+    }
+
+    const toBase64 = (blob: Blob) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const raw = String(reader.result || "");
+          const comma = raw.indexOf(",");
+          resolve(comma >= 0 ? raw.slice(comma + 1) : raw);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+
+    setPushingToCms(true);
+    let ok = 0;
+    const missing: string[] = [];
+    const failed: string[] = [];
+    for (const product of chosen) {
+      try {
+        const designed = results.find(
+          (item) => item.productId === product.id && item.afterBase64 && !item.error
+        );
+        const primaryBase64 = designed?.afterBase64 || (await toBase64(product.file));
+        const images: Array<{ imageBase64: string; position: number; primary: boolean }> = [
+          { imageBase64: primaryBase64, position: 1, primary: true },
+        ];
+        let position = 2;
+        for (const image of product.gallery ?? []) {
+          if (image.src === product.activeSrc) continue;
+          const res = await fetch("/api/fetch-image", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ url: image.src }),
+          });
+          if (!res.ok) continue;
+          images.push({
+            imageBase64: await toBase64(await res.blob()),
+            position: image.position || position,
+            primary: false,
+          });
+          position += 1;
+        }
+        await updateCustomApiProductByName(connection, {
+          title: product.name,
+          price: product.price,
+          currency: product.currency,
+          imageBase64: primaryBase64,
+          images,
+        });
+        ok += 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "שגיאה";
+        if (/לא נמצא מוצר/.test(message)) missing.push(product.name);
+        else failed.push(product.name);
+      }
+    }
+    setPushingToCms(false);
+    if (ok > 0 && missing.length === 0 && failed.length === 0) {
+      pushToast(`${ok} מוצרים עודכנו באתר לפי השם`);
+      return;
+    }
+    const parts = [`עודכנו ${ok}`];
+    if (missing.length) parts.push(`${missing.length} לא נמצאו לפי השם`);
+    if (failed.length) parts.push(`${failed.length} נכשלו`);
+    pushToast(parts.join(" · "));
   };
 
   /* ---------- Catalog ---------- */
@@ -1254,6 +1334,8 @@ export default function PixaApp() {
             onAddUploads={handleAddUploads}
             onImportScanned={handleImportScanned}
             onPickGalleryImage={handlePickGalleryImage}
+            onPushToCms={handlePushToCms}
+            pushingToCms={pushingToCms}
             connection={connection}
             shopifyProducts={shopifyProducts}
             shopifyCategories={shopifyCategories}

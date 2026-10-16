@@ -223,6 +223,66 @@ export async function uploadCustomApiImage(
   return { newImageUrl };
 }
 
+export async function updateCustomApiProductByName(
+  creds: CustomApiCredentials,
+  args: {
+    title: string;
+    price?: number;
+    currency?: string;
+    imageBase64?: string;
+    images?: Array<{ imageBase64: string; position: number; primary: boolean }>;
+  }
+): Promise<{ id: string; title: string; imageUrl?: string }> {
+  const res = await customApiFetch(
+    creds,
+    "/products/by-name",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: args.title,
+        price: args.price,
+        currency: args.currency,
+        image_base64: args.imageBase64,
+        images: (args.images ?? []).map((img) => ({
+          image_base64: img.imageBase64,
+          position: img.position,
+          primary: img.primary,
+        })),
+      }),
+    },
+    60_000
+  );
+
+  const text = await res.text().catch(() => "");
+  if (text.trim().startsWith("<")) {
+    throw new Error(
+      "האתר עדיין לא מגיש את הנתיב /products/by-name. צריך להעלות את ה-CMS ל-Vercel ולהגדיר שם את משתני הסביבה."
+    );
+  }
+  if (res.status === 404) {
+    throw new CustomApiRequestError(
+      `לא נמצא מוצר בשם "${args.title}"`,
+      404
+    );
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new CustomApiRequestError("אימות נכשל. בדוק את ה-API Key.", res.status);
+  }
+  if (!res.ok) {
+    throw new Error(
+      `שגיאה בעדכון ${res.status}${text ? `: ${text.slice(0, 200)}` : ""}`
+    );
+  }
+
+  const data = JSON.parse(text) as Record<string, unknown>;
+  return {
+    id: String(data.id ?? ""),
+    title: String(data.title ?? args.title),
+    imageUrl: typeof data.image_url === "string" ? data.image_url : undefined,
+  };
+}
+
 export async function uploadCustomApiDrawing(
   creds: CustomApiCredentials,
   args: {
