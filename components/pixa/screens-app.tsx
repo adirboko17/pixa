@@ -16,6 +16,7 @@ import {
   type CustomBackedProduct,
   type ShopifyBackedProduct,
   type StoreBackedProduct,
+  DRAFTS_CATEGORY_ID,
   type Category,
   type Preset,
   type HistoryBatch,
@@ -1036,6 +1037,8 @@ export const ProductsScreen: React.FC<{
   pushingToCms?: boolean;
   /** Real store products. Empty when not connected or still loading. */
   shopifyProducts: StoreBackedProduct[];
+  /** Unpublished store drafts. Designed here before they go live. */
+  draftProducts?: StoreBackedProduct[];
   /** Real Shopify collections (used as category chips). */
   shopifyCategories: Category[];
   /** Total products in the full catalog (not the active collection filter). */
@@ -1064,6 +1067,7 @@ export const ProductsScreen: React.FC<{
   onPushToCms,
   pushingToCms = false,
   shopifyProducts,
+  draftProducts = [],
   shopifyCategories,
   shopifyCatalogTotal = 0,
   loadingShopify,
@@ -1085,37 +1089,53 @@ export const ProductsScreen: React.FC<{
 
   const handleCategory = (catId: string) => {
     setCategory(catId);
+    if (catId === DRAFTS_CATEGORY_ID) return;
     if (connected && onFilterCollection) {
       onFilterCollection(catId === "all" ? undefined : catId);
     }
   };
 
+  const showingDrafts = category === DRAFTS_CATEGORY_ID;
+
   // Catalog source: real Shopify products when connected, otherwise uploads only.
   const catalogProducts: AnyProduct[] = useMemo(() => {
-    if (connected) return shopifyProducts;
-    return [];
-  }, [connected, shopifyProducts]);
+    if (!connected) return [];
+    if (showingDrafts) return draftProducts;
+    return shopifyProducts;
+  }, [connected, showingDrafts, shopifyProducts, draftProducts]);
 
   const allProducts: AnyProduct[] = useMemo(
-    () => [...uploads, ...catalogProducts],
-    [uploads, catalogProducts]
+    () => (showingDrafts ? catalogProducts : [...uploads, ...catalogProducts]),
+    [uploads, catalogProducts, showingDrafts]
   );
 
-  // Categories: real Shopify collections when connected, otherwise just "all".
+  // Categories: real Shopify collections when connected, plus unpublished drafts.
   const categories: Category[] = useMemo(() => {
     const allCat: Category = {
       id: "all",
       name: "כל המוצרים",
       count: connected ? shopifyCatalogTotal : uploads.length,
     };
+    const draftCat: Category = {
+      id: DRAFTS_CATEGORY_ID,
+      name: "טיוטות",
+      count: draftProducts.length,
+    };
     if (connected && shopifyCategories.length > 0) {
-      return [allCat, ...shopifyCategories];
+      return [allCat, draftCat, ...shopifyCategories];
     }
+    if (connected) return [allCat, draftCat];
     if (uploads.length > 0) {
       return [{ ...allCat, count: uploads.length }];
     }
     return [allCat];
-  }, [connected, shopifyCatalogTotal, shopifyCategories, uploads.length]);
+  }, [
+    connected,
+    shopifyCatalogTotal,
+    shopifyCategories,
+    uploads.length,
+    draftProducts.length,
+  ]);
 
   const filtered = useMemo(() => {
     const list = allProducts.filter((p) => {
@@ -1147,10 +1167,19 @@ export const ProductsScreen: React.FC<{
       return [...prev, id];
     });
   const clearAll = () => setSelectedIds([]);
+  const canDesignProduct = (p: AnyProduct) => {
+    if (isUploadedProduct(p)) return true;
+    if (isStoreBackedProduct(p)) return !!p.imageUrl;
+    return true;
+  };
+
   const selectAllVisible = () =>
     setSelectedIds((prev) => {
       const merged = Array.from(
-        new Set([...prev, ...filtered.map((p) => p.id)])
+        new Set([
+          ...prev,
+          ...filtered.filter(canDesignProduct).map((p) => p.id),
+        ])
       );
       return merged.slice(0, MAX_BATCH_SELECT);
     });
@@ -1420,6 +1449,16 @@ export const ProductsScreen: React.FC<{
                 </button>
               </div>
             </>
+          ) : showingDrafts ? (
+            <>
+              <p style={{ color: "var(--ink-2)", marginBottom: 8, fontSize: 15 }}>
+                אין מוצרים בטיוטה
+              </p>
+              <p style={{ fontSize: 13, lineHeight: 1.6 }}>
+                מוצרים שעדיין לא פורסמו באתר יופיעו כאן, ואפשר לעצב להם תמונה
+                לפני שהם הופכים לפעילים.
+              </p>
+            </>
           ) : connected && shopifyProducts.length === 0 && uploads.length === 0 ? (
             <>
               <p style={{ color: "var(--ink-2)", marginBottom: 8, fontSize: 15 }}>
@@ -1446,6 +1485,8 @@ export const ProductsScreen: React.FC<{
             const isSelected = selectedIds.includes(p.id);
             const upload = isUploadedProduct(p);
             const storeBacked = isStoreBackedProduct(p);
+            const isDraft = p.listingStatus === "draft";
+            const missingSource = storeBacked && !p.imageUrl;
             const imgSrc = upload
               ? p.fileUrl
               : storeBacked
@@ -1458,14 +1499,38 @@ export const ProductsScreen: React.FC<{
                   atSelectionLimit && !isSelected ? " selection-capped" : ""
                 } anim-up`}
                 style={{ animationDelay: `${(i % 12) * 30}ms` }}
-                onClick={() => toggle(p.id)}
+                onClick={() => {
+                  if (missingSource) return;
+                  toggle(p.id);
+                }}
               >
                 <div className="product-img">
-                  <img src={imgSrc} alt={p.name} loading="lazy" />
+                  {imgSrc ? (
+                    <img src={imgSrc} alt={p.name} loading="lazy" />
+                  ) : (
+                    <div
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "grid",
+                        placeItems: "center",
+                        color: "var(--ink-3)",
+                        fontSize: 12,
+                      }}
+                    >
+                      אין תמונת מקור
+                    </div>
+                  )}
                   <span
                     className={`product-tag ${p.optimized ? "opt" : ""}`}
                   >
-                    {upload ? "הועלה" : p.optimized ? "מעוצב" : "חדש"}
+                    {isDraft
+                      ? "טיוטה"
+                      : upload
+                        ? "הועלה"
+                        : p.optimized
+                          ? "מעוצב"
+                          : "חדש"}
                   </span>
                   <div className="product-check">
                     {isSelected && <II.Check size={12} strokeWidth={3} />}
@@ -1511,6 +1576,11 @@ export const ProductsScreen: React.FC<{
                 <div className="product-info">
                   <div className="product-name">{p.name}</div>
                   <div className="product-price">{formatCatalogPrice(p)}</div>
+                  {missingSource && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
+                      צריך תמונת מקור כדי לעצב
+                    </div>
+                  )}
                   {upload && p.gallery && p.gallery.length > 1 && (
                     <div style={{ marginTop: 6, fontSize: 11, color: "var(--ink-3)" }}>
                       סמן איזו תמונה תישלח לעיצוב
@@ -2205,6 +2275,9 @@ export const ProcessingOverlay: React.FC<{
             errorMsg = "המודל לא החזיר תמונה";
           }
         } else if (storeBacked) {
+          if (!p.imageUrl) {
+            throw new Error("אין תמונת מקור למוצר הטיוטה");
+          }
           setPhase("download");
           const safeName =
             p.name.replace(/[^\w\u0590-\u05FF]+/g, "_").slice(0, 80) ||

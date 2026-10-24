@@ -78,13 +78,44 @@ async function customApiFetch(
   }
 }
 
+export type ListingStatus = "active" | "draft" | "archived";
+
 export type NormalizedCustomProduct = {
   id: string;
   title: string;
   image_url?: string | null;
   images: Array<{ url: string; position?: number; alt?: string | null }>;
   dimensions?: ProductDimensions;
+  listingStatus: ListingStatus;
 };
+
+function readListingStatus(raw: Record<string, unknown>): ListingStatus {
+  const status = String(
+    raw.status ?? raw.publish_status ?? raw.published_status ?? raw.visibility ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    status === "draft" ||
+    status === "unpublished" ||
+    status === "private" ||
+    status === "hidden"
+  ) {
+    return "draft";
+  }
+  if (status === "archived" || status === "archive") return "archived";
+  if (
+    raw.published === false ||
+    raw.is_published === false ||
+    raw.isPublished === false ||
+    raw.draft === true ||
+    raw.is_draft === true ||
+    raw.isDraft === true
+  ) {
+    return "draft";
+  }
+  return "active";
+}
 
 function pickImageUrl(raw: Record<string, unknown>): string | null {
   const direct =
@@ -142,6 +173,7 @@ function normalizeProduct(raw: Record<string, unknown>): NormalizedCustomProduct
     image_url: imageUrl,
     images,
     dimensions: extractDimensionsFromProduct(raw, title),
+    listingStatus: readListingStatus(raw),
   };
 }
 
@@ -173,7 +205,10 @@ export async function fetchCustomApiProducts(
         item && typeof item === "object" ? (item as Record<string, unknown>) : {}
       )
     )
-    .filter((p): p is NormalizedCustomProduct => p !== null && !!p.image_url);
+    .filter(
+      (p): p is NormalizedCustomProduct =>
+        p !== null && (p.listingStatus === "draft" || !!p.image_url)
+    );
 
   const storeName =
     typeof data.store_name === "string"

@@ -32,6 +32,7 @@ export type CustomApiProduct = {
   image_url?: string | null;
   images?: CustomApiImage[];
   dimensions?: ProductDimensions;
+  listingStatus?: "active" | "draft" | "archived";
 };
 
 export async function validateCustomApiConnection(

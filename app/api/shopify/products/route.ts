@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       limit?: number;
       collectionId?: number | string;
       fetchAll?: boolean;
+      query?: string;
     };
     if (!body.shop || !body.token) {
       return NextResponse.json(
@@ -36,6 +37,7 @@ export async function POST(req: NextRequest) {
         collectionId: body.collectionId,
         fetchAll,
         pageInfo: body.pageInfo,
+        query: body.query,
       }
     );
 

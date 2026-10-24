@@ -119,6 +119,8 @@ export async function listProducts(
     limit?: number;
     collectionId?: number | string;
     fetchAll?: boolean;
+    /** Shopify product search, e.g. "status:draft". Defaults to active products. */
+    query?: string;
   } = {}
 ): Promise<{
   products: ShopifyProduct[];
@@ -133,6 +135,7 @@ export async function listProducts(
     limit: opts.limit ?? (fetchAll ? 250 : 50),
     collectionId: opts.collectionId,
     fetchAll,
+    query: opts.query,
   });
 }
 

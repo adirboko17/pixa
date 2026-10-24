@@ -254,7 +254,10 @@ const COLLECTION_PRODUCTS_QUERY = `
   }
 `;
 
-function mapGraphqlProduct(node: GraphQLProductNode): ShopifyAdminProduct | null {
+function mapGraphqlProduct(
+  node: GraphQLProductNode,
+  opts?: { allowWithoutImage?: boolean }
+): ShopifyAdminProduct | null {
   const images: ShopifyAdminProduct["images"] = [];
 
   for (const edge of node.images?.edges || []) {
@@ -301,7 +304,7 @@ function mapGraphqlProduct(node: GraphQLProductNode): ShopifyAdminProduct | null
     }
   }
 
-  if (images.length === 0) return null;
+  if (images.length === 0 && !opts?.allowWithoutImage) return null;
 
   images.forEach((img, i) => {
     img.position = i + 1;
@@ -331,8 +334,11 @@ async function fetchProductPage(
     after?: string;
     collectionId?: number | string;
     query?: string;
+    allowWithoutImage?: boolean;
   }
 ): Promise<{ products: ShopifyAdminProduct[]; hasNextPage: boolean; endCursor?: string }> {
+  const mapNode = (node: GraphQLProductNode) =>
+    mapGraphqlProduct(node, { allowWithoutImage: args.allowWithoutImage });
   if (args.collectionId) {
     const data = await shopifyGraphql<{
       collection?: {
@@ -349,7 +355,7 @@ async function fetchProductPage(
 
     const connection = data.collection?.products;
     const products = (connection?.edges || [])
-      .map((edge) => (edge?.node ? mapGraphqlProduct(edge.node) : null))
+      .map((edge) => (edge?.node ? mapNode(edge.node) : null))
       .filter((p): p is ShopifyAdminProduct => p !== null);
 
     return {
@@ -372,7 +378,7 @@ async function fetchProductPage(
 
   const connection = data.products;
   const products = (connection?.edges || [])
-    .map((edge) => (edge?.node ? mapGraphqlProduct(edge.node) : null))
+    .map((edge) => (edge?.node ? mapNode(edge.node) : null))
     .filter((p): p is ShopifyAdminProduct => p !== null);
 
   return {
@@ -390,6 +396,7 @@ export async function fetchAllProductsGraphql(
     collectionId?: number | string;
     fetchAll?: boolean;
     pageInfo?: string;
+    query?: string;
   } = {}
 ): Promise<{ products: ShopifyAdminProduct[]; nextPageInfo?: string }> {
   const limit = Math.max(1, Math.min(250, opts.limit || 250));
@@ -403,6 +410,8 @@ export async function fetchAllProductsGraphql(
       first: limit,
       after,
       collectionId: opts.collectionId,
+      query: opts.query,
+      allowWithoutImage: opts.query === "status:draft",
     });
     all.push(...result.products);
 

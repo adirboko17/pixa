@@ -98,13 +98,21 @@ function skippedStoreConnect(userId: string | undefined): boolean {
 }
 
 function mapShopifyToProducts(
-  shopify: ShopifyProduct[]
+  shopify: ShopifyProduct[],
+  opts?: { keepWithoutImage?: boolean }
 ): ShopifyBackedProduct[] {
   return shopify
     .map((p): ShopifyBackedProduct | null => {
       const featured =
         p.images.find((img) => img.id === p.featuredImageId) || p.images[0];
-      if (!featured) return null;
+      if (!featured && !opts?.keepWithoutImage) return null;
+      const status = (p.status || "active").toLowerCase();
+      const listingStatus =
+        status === "draft"
+          ? "draft"
+          : status === "archived"
+            ? "archived"
+            : "active";
       return {
         id: p.id,
         name: p.title,
@@ -113,11 +121,12 @@ function mapShopifyToProducts(
         img: "",
         optimized: false,
         isShopify: true,
-        imageUrl: featured.src,
-        imageId: featured.id,
+        imageUrl: featured?.src || "",
+        imageId: featured?.id,
         vendor: p.vendor,
         productType: p.product_type,
         createdAt: p.createdAt,
+        listingStatus,
       };
     })
     .filter((p): p is ShopifyBackedProduct => p !== null);
@@ -131,8 +140,10 @@ function mapCustomApiToProducts(
       const imageUrl =
         p.image_url ||
         p.images?.find((img) => img.url)?.url ||
-        p.images?.[0]?.url;
-      if (!imageUrl) return null;
+        p.images?.[0]?.url ||
+        "";
+      const listingStatus = p.listingStatus || "active";
+      if (!imageUrl && listingStatus !== "draft") return null;
       return {
         id: stableProductId(p.id),
         externalId: p.id,
@@ -144,6 +155,7 @@ function mapCustomApiToProducts(
         isCustomApi: true,
         imageUrl,
         dimensions: p.dimensions,
+        listingStatus,
       };
     })
     .filter((p): p is CustomBackedProduct => p !== null);
@@ -207,6 +219,7 @@ export default function PixaApp() {
   const [shopifyProducts, setShopifyProducts] = useState<StoreBackedProduct[]>(
     []
   );
+  const [draftProducts, setDraftProducts] = useState<StoreBackedProduct[]>([]);
   const [shopifyCategories, setShopifyCategories] = useState<Category[]>([]);
   const [shopifyCatalogTotal, setShopifyCatalogTotal] = useState(0);
   const [loadingShopify, setLoadingShopify] = useState(false);
@@ -390,8 +403,11 @@ export default function PixaApp() {
         if (conn.platform === "custom-api") {
           const { products } = await listCustomApiProducts(conn);
           const mapped = mapCustomApiToProducts(products);
-          setShopifyProducts(mapped);
-          setShopifyCatalogTotal(mapped.length);
+          const drafts = mapped.filter((p) => p.listingStatus === "draft");
+          const live = mapped.filter((p) => p.listingStatus !== "draft");
+          setShopifyProducts(live);
+          setDraftProducts(drafts);
+          setShopifyCatalogTotal(live.length);
           setShopifyCategories([]);
           return;
         }
@@ -400,11 +416,19 @@ export default function PixaApp() {
           collectionId && collectionId !== "all"
             ? Number(collectionId)
             : undefined;
-        const [{ products }, { collections }] = await Promise.all([
+        const [{ products }, draftResult, { collections }] = await Promise.all([
           listProducts(conn, {
             fetchAll: true,
             ...(collectionNum ? { collectionId: collectionNum } : {}),
           }),
+          collectionNum
+            ? Promise.resolve(null)
+            : listProducts(conn, { fetchAll: true, query: "status:draft" }).catch(
+                (err) => {
+                  console.warn("[pixa] failed to load Shopify drafts:", err);
+                  return null;
+                }
+              ),
           collectionNum
             ? Promise.resolve({ collections: [] as ShopifyCollection[] })
             : listCollections(conn).catch((err) => {
@@ -415,6 +439,13 @@ export default function PixaApp() {
         const mapped = mapShopifyToProducts(products);
         setShopifyProducts(mapped);
         if (!collectionNum) {
+          setDraftProducts(
+            draftResult
+              ? mapShopifyToProducts(draftResult.products, {
+                  keepWithoutImage: true,
+                }).filter((p) => p.listingStatus === "draft")
+              : []
+          );
           setShopifyCatalogTotal(mapped.length);
           setShopifyCategories(mapShopifyCollections(collections));
         }
@@ -423,6 +454,7 @@ export default function PixaApp() {
         setShopifyError(msg);
         setShopifyProducts([]);
         if (!collectionId) {
+          setDraftProducts([]);
           setShopifyCategories([]);
           setShopifyCatalogTotal(0);
         }
@@ -437,6 +469,7 @@ export default function PixaApp() {
     if (!connection || !session?.user?.id) {
       if (!connection) {
         setShopifyProducts([]);
+        setDraftProducts([]);
         setShopifyCategories([]);
         setShopifyCatalogTotal(0);
       }
@@ -543,6 +576,7 @@ export default function PixaApp() {
     clearStoreConnection();
     setConnection(null);
     setShopifyProducts([]);
+    setDraftProducts([]);
     setShopifyCategories([]);
     setSelectedIds([]);
     setResults([]);
@@ -560,6 +594,7 @@ export default function PixaApp() {
     clearStoreConnection();
     setConnection(null);
     setShopifyProducts([]);
+    setDraftProducts([]);
     setShopifyCategories([]);
     setShopifyCatalogTotal(0);
     setShopifyError(null);
@@ -738,13 +773,24 @@ export default function PixaApp() {
 
   /* ---------- Catalog ---------- */
   const allAvailable: AnyProduct[] = useMemo(() => {
-    const base: AnyProduct[] = connection ? shopifyProducts : [];
-    return [...uploads, ...base];
-  }, [uploads, connection, shopifyProducts]);
+    const base: AnyProduct[] = connection
+      ? [...shopifyProducts, ...draftProducts]
+      : [];
+    const seen = new Set<number>();
+    const merged: AnyProduct[] = [];
+    for (const product of [...uploads, ...base]) {
+      if (seen.has(product.id)) continue;
+      seen.add(product.id);
+      merged.push(product);
+    }
+    return merged;
+  }, [uploads, connection, shopifyProducts, draftProducts]);
 
   const productsCountForSidebar = useMemo(
-    () => (connection ? shopifyProducts.length : 0) + uploads.length,
-    [connection, shopifyProducts.length, uploads.length]
+    () =>
+      (connection ? shopifyProducts.length + draftProducts.length : 0) +
+      uploads.length,
+    [connection, shopifyProducts.length, draftProducts.length, uploads.length]
   );
 
   const startBatch = (ids?: number[]) => {
@@ -1309,7 +1355,8 @@ export default function PixaApp() {
             catalogCount={
               uploads.length +
               (connection
-                ? Math.max(shopifyCatalogTotal, shopifyProducts.length)
+                ? Math.max(shopifyCatalogTotal, shopifyProducts.length) +
+                  draftProducts.length
                 : 0)
             }
             loadingCatalog={!!connection && loadingShopify}
@@ -1338,6 +1385,7 @@ export default function PixaApp() {
             pushingToCms={pushingToCms}
             connection={connection}
             shopifyProducts={shopifyProducts}
+            draftProducts={draftProducts}
             shopifyCategories={shopifyCategories}
             shopifyCatalogTotal={shopifyCatalogTotal}
             loadingShopify={loadingShopify}

@@ -22,7 +22,11 @@ export type Product = {
   dimensions?: ProductDimensions;
   /** ISO currency for a price that came from a scanned catalog. */
   currency?: string;
+  /** Store listing state. Drafts are not live on the site yet. */
+  listingStatus?: "active" | "draft" | "archived";
 };
+
+export const DRAFTS_CATEGORY_ID = "drafts";
 
 /**
  * Product type used in the UI when the user has connected a real Shopify
