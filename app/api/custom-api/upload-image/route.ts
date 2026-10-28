@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: unknown) {
     const m = describeCustomApiError(err);
+    console.error("[custom-api] upload image failed", m);
     return NextResponse.json({ error: m }, { status: 502 });
   }
 }

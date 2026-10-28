@@ -1,4 +1,7 @@
-import { uploadCustomApiProductImage } from "@/lib/custom-api-client";
+import {
+  stableProductId,
+  uploadCustomApiProductImage,
+} from "@/lib/custom-api-client";
 import { uploadProductImage as uploadShopifyImage } from "@/lib/shopify-client";
 import type {
   CustomBackedProduct,
@@ -88,10 +91,51 @@ export function enrichHistoryItem(
   };
 }
 
+const STORE_PRODUCT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function resolveCustomExternalId(
+  item: HistoryBatchItem,
+  storeProducts: StoreBackedProduct[]
+): string | undefined {
+  const catalog = storeProducts.filter(isCustomApiProduct);
+  const meta = getBatchItemMeta(item.id);
+  const known = new Set(catalog.map((product) => product.externalId));
+  const metaId = meta?.externalProductId ?? item.externalProductId;
+  if (metaId && known.has(metaId)) return metaId;
+
+  if (item.beforeUrl) {
+    const normalized = item.beforeUrl.split("?")[0];
+    const matched = catalog.find(
+      (product) => product.imageUrl.split("?")[0] === normalized
+    );
+    if (matched) return matched.externalId;
+  }
+
+  if (item.productId != null) {
+    const byId = catalog.find(
+      (product) =>
+        product.id === item.productId ||
+        stableProductId(product.externalId) === item.productId
+    );
+    if (byId) return byId.externalId;
+  }
+
+  const name = item.productName.trim().toLowerCase();
+  if (name) {
+    const byName = catalog.filter(
+      (product) => product.name.trim().toLowerCase() === name
+    );
+    if (byName.length === 1) return byName[0].externalId;
+  }
+
+  return metaId && STORE_PRODUCT_ID.test(metaId) ? metaId : undefined;
+}
+
 export type PublishHistoryResult = {
   ok: number;
   failed: number;
   publishedProductIds: Map<number, string>;
+  error?: string;
 };
 
 export async function publishHistoryItems(
@@ -101,6 +145,7 @@ export async function publishHistoryItems(
 ): Promise<PublishHistoryResult> {
   let ok = 0;
   let failed = 0;
+  let error: string | undefined;
   const publishedProductIds = new Map<number, string>();
 
   for (const item of items) {
@@ -138,21 +183,10 @@ export async function publishHistoryItems(
           publishedProductIds.set(productId, uploadRes.image.src);
         }
       } else if (connection.platform === "custom-api") {
-        let externalId = meta?.externalProductId;
-        if (!externalId && item.beforeUrl) {
-          const normalized = item.beforeUrl.split("?")[0];
-          const matched = storeProducts.find(
-            (p) =>
-              isCustomApiProduct(p) &&
-              p.imageUrl.split("?")[0] === normalized
-          );
-          externalId =
-            matched && isCustomApiProduct(matched)
-              ? matched.externalId
-              : undefined;
-        }
+        const externalId = resolveCustomExternalId(item, storeProducts);
         if (!externalId) {
           failed += 1;
+          error ??= "לא נמצא המוצר בחנות המחוברת";
           continue;
         }
         const uploadRes = await uploadCustomApiProductImage(connection, {
@@ -177,8 +211,9 @@ export async function publishHistoryItems(
     } catch (err) {
       console.error("[publish] history item failed", item.id, err);
       failed += 1;
+      error ??= err instanceof Error ? err.message : "הפרסום נכשל";
     }
   }
 
-  return { ok, failed, publishedProductIds };
+  return { ok, failed, publishedProductIds, error };
 }

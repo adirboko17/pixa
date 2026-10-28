@@ -3577,7 +3577,7 @@ export const HistoryScreen: React.FC<{
     if (!connection || selectedItems.length === 0) return;
     setPublishing(true);
     try {
-      const { ok, failed, publishedProductIds } = await publishHistoryItems(
+      const { ok, failed, publishedProductIds, error } = await publishHistoryItems(
         selectedItems,
         connection,
         storeProducts
@@ -3593,7 +3593,11 @@ export const HistoryScreen: React.FC<{
       } else if (ok > 0) {
         onToast?.(`${ok} פורסמו · ${failed} נכשלו`);
       } else {
-        onToast?.(`כל הפרסומים נכשלו (${failed})`);
+        onToast?.(
+          error
+            ? `הפרסום נכשל: ${error}`
+            : `כל הפרסומים נכשלו (${failed})`
+        );
       }
     } finally {
       setPublishing(false);
