@@ -184,7 +184,9 @@ export async function fetchCustomApiProducts(
 
   if (res.status === 401 || res.status === 403) {
     throw new Error(
-      "אימות נכשל. ה-API Key השמור לא תואם ל-PHOTOSPRO_API_KEY בפונקציה photospro-api. חבר מחדש בהגדרות עם המפתח העדכני."
+      creds.apiKey.startsWith("pp_")
+        ? "אימות נכשל. המפתח לא תואם לחנות ב-Storely. העתיקו אותו שוב מכרטיס החנות."
+        : "אימות נכשל. ה-API Key השמור לא תואם ל-PHOTOSPRO_API_KEY בפונקציה photospro-api. חבר מחדש בהגדרות עם המפתח העדכני."
     );
   }
   if (!res.ok) {

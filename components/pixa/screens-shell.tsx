@@ -679,7 +679,7 @@ export const ConnectScreen: React.FC<{
   onConnected: (conn: StoreConnection) => void;
   onSkip?: () => void;
 }> = ({ onConnected, onSkip }) => {
-  const [platform, setPlatform] = useState<StorePlatform>("shopify");
+  const [platform, setPlatform] = useState<StorePlatform | "storely">("shopify");
   const [store, setStore] = useState("");
   const [token, setToken] = useState("");
   const [apiUrl, setApiUrl] = useState("");
@@ -803,7 +803,9 @@ export const ConnectScreen: React.FC<{
             >
               {platform === "shopify"
                 ? "הזן את כתובת החנות שלך ואת ה-Access Token של אפליקציית ה-Admin בתוך Shopify. החיבור נשמר בחשבון שלך ויטען בכל התחברות."
-                : "חבר אתר Lovable עם מוצרים ב-Supabase. הזן את כתובת ה-Edge Function ואת ה-API Key שיצרת בפרויקט."}
+                : platform === "storely"
+                  ? "כל חנות ב-Storely מקבלת מפתח קבוע. מדביקים את כתובת ה-Storely ואת המפתח מכרטיס החנות. PhotosPro קורא את המוצרים ומעדכן את התמונות."
+                  : "חבר אתר Lovable עם מוצרים ב-Supabase. הזן את כתובת ה-Edge Function ואת ה-API Key שיצרת בפרויקט."}
             </p>
 
             <div
@@ -820,6 +822,7 @@ export const ConnectScreen: React.FC<{
               {(
                 [
                   { id: "shopify" as const, label: "Shopify", icon: I.Shopify },
+                  { id: "storely" as const, label: "Storely", icon: I.Globe },
                   { id: "custom-api" as const, label: "Lovable / API", icon: I.Globe },
                 ] as const
               ).map((tab) => {
@@ -952,7 +955,11 @@ export const ConnectScreen: React.FC<{
                     type="text"
                     value={apiUrl}
                     onChange={(e) => setApiUrl(e.target.value)}
-                    placeholder="https://xxx.supabase.co/functions/v1/photospro-api"
+                    placeholder={
+                      platform === "storely"
+                        ? "https://כתובת-ה-storely"
+                        : "https://xxx.supabase.co/functions/v1/photospro-api"
+                    }
                     style={{
                       width: "100%",
                       height: 60,
@@ -982,7 +989,7 @@ export const ConnectScreen: React.FC<{
                     type="password"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="API Key (PHOTOSPRO_API_KEY)"
+                    placeholder={platform === "storely" ? "pp_…" : "API Key (PHOTOSPRO_API_KEY)"}
                     style={{
                       width: "100%",
                       height: 60,
@@ -1020,7 +1027,9 @@ export const ConnectScreen: React.FC<{
             >
               {platform === "shopify"
                 ? `איפה משיגים את ה-Access Token? ${showHelp ? "▲" : "▼"}`
-                : `איך מכינים את ה-API ב-Lovable? ${showHelp ? "▲" : "▼"}`}
+                : platform === "storely"
+                  ? `איפה המפתח של החנות? ${showHelp ? "▲" : "▼"}`
+                  : `איך מכינים את ה-API ב-Lovable? ${showHelp ? "▲" : "▼"}`}
             </button>
             {showHelp && platform === "shopify" && (
               <div
@@ -1062,6 +1071,37 @@ export const ConnectScreen: React.FC<{
                     <span className="mono">Admin API access token</span> (מתחיל
                     ב-<span className="mono">shpat_</span>)
                   </li>
+                </ol>
+              </div>
+            )}
+            {showHelp && platform === "storely" && (
+              <div
+                style={{
+                  background: "var(--bg-card)",
+                  border: "1px solid var(--hair)",
+                  borderRadius: 12,
+                  padding: 16,
+                  fontSize: 13,
+                  color: "var(--ink-2)",
+                  lineHeight: 1.7,
+                  marginBottom: 18,
+                }}
+              >
+                <ol
+                  style={{
+                    margin: 0,
+                    paddingInlineStart: 20,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  <li>ב-Storely פותחים את כרטיס החנות</li>
+                  <li>
+                    מעתיקים את כתובת ה-Storely ואת המפתח שמתחיל ב-
+                    <span className="mono">pp_</span>
+                  </li>
+                  <li>מדביקים אותם כאן. המפתח נשאר קבוע לחנות הזו</li>
                 </ol>
               </div>
             )}
@@ -1133,6 +1173,10 @@ export const ConnectScreen: React.FC<{
               {platform === "shopify" ? (
                 <>
                   <I.Shopify size={18} /> חבר את חנות Shopify
+                </>
+              ) : platform === "storely" ? (
+                <>
+                  <I.Globe size={18} /> חבר חנות Storely
                 </>
               ) : (
                 <>

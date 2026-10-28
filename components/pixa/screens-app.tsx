@@ -4349,9 +4349,7 @@ const StoreTab: React.FC<{
             <div style={{ minWidth: 0, textAlign: "start" }}>
               <div style={{ fontWeight: 600, fontSize: 15 }}>
                 <span dir="ltr">
-                  {connection.platform === "shopify"
-                    ? connection.shopName || connection.shop
-                    : connection.storeName || "Lovable / API"}
+                  {getConnectionLabel(connection)}
                 </span>
               </div>
               <div
@@ -4368,7 +4366,7 @@ const StoreTab: React.FC<{
                 }}
               >
                 <span>
-                  {connection.platform === "shopify" ? "Shopify" : "Lovable / API"}
+                  {getConnectionPlatformLabel(connection)}
                 </span>
                 {connection.platform === "shopify" && connection.shopName ? (
                   <>

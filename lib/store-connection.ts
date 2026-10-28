@@ -90,13 +90,20 @@ export function clearStoreConnection(): void {
   clearShopifyConnection();
 }
 
+export function isStorelyConnection(conn: StoreConnection): boolean {
+  return conn.platform === "custom-api" && conn.apiKey.startsWith("pp_");
+}
+
 export function getConnectionLabel(conn: StoreConnection): string {
   if (conn.platform === "shopify") {
     return conn.shopName || conn.shop;
   }
+  if (isStorelyConnection(conn)) return conn.storeName || "Storely";
   return conn.storeName || "Lovable / API";
 }
 
 export function getConnectionPlatformLabel(conn: StoreConnection): string {
-  return conn.platform === "shopify" ? "Shopify" : "Lovable / API";
+  if (conn.platform === "shopify") return "Shopify";
+  if (isStorelyConnection(conn)) return "Storely";
+  return "Lovable / API";
 }
